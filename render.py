@@ -1,3 +1,4 @@
+from argparse import ArgumentParser
 import torch
 import numpy as np
 import open3d as o3d
@@ -18,8 +19,8 @@ def init_camera(y_angle=0., center_dist=2.4, cam_height=1.3, f_ratio=0.82):
     k = np.array([[f_ratio * w, 0, w / 2], [0, f_ratio * w, h / 2], [0, 0, 1]])
     return w2c, k
 
-def load_scene_data(seq, exp):
-    params = dict(np.load(f"./output/{exp}/{seq}/params.npz"))
+def load_scene_data(seq, exp, output_dir):
+    params = dict(np.load(f"{output_dir}/{exp}/{seq}/params.npz"))
     params = {k: torch.tensor(v).cuda().float() for k, v in params.items()}
     rendervar = {
         'means3D': params['means3D'][0],
@@ -44,14 +45,17 @@ def tensor_to_image(im):
     return o3d.geometry.Image(im_np)
 
 def main():
+    parser = ArgumentParser()
+    parser.add_argument("exp_name", type=str, default="pretrained", help="Experiment name")
+    parser.add_argument("output_dir", type=str, default="./output", help="Path to the output directory")
+    args = parser.parse_args()
     from open3d.visualization.rendering import OffscreenRenderer, MaterialRecord
 
-    exp_name = "pretrained"
-    sequences = ["basketball", "boxes", "football", "juggle", "softball", "tennis"]
 
+    sequences = ["basketball", "boxes", "football", "juggle", "softball", "tennis"]
     for seq in sequences:
         print(f"Rendering {seq}...")
-        scene_data = load_scene_data(seq, exp_name)
+        scene_data = load_scene_data(seq, args.exp_name, args.output_dir)
         w2c, k = init_camera()
         im = render_image(w2c, k, scene_data)
 
@@ -60,7 +64,7 @@ def main():
 
         # Save using OffscreenRenderer (just to initialize context safely)
         renderer = OffscreenRenderer(int(w * view_scale), int(h * view_scale))
-        img_path = f"./output/{exp_name}/{seq}_frame0.png"
+        img_path = f"{args.output_dir}/{args.exp_name}/{seq}_frame0.png"
         o3d.io.write_image(img_path, img)
         del renderer
         print(f"Saved to {img_path}")

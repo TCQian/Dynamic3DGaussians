@@ -1,3 +1,4 @@
+from argparse import ArgumentParser
 import torch
 import os
 import json
@@ -12,15 +13,15 @@ from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, w
 from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
 
 
-def get_dataset(t, md, seq):
+def get_dataset(t, md, seq, data_dir):
     dataset = []
     for c in range(len(md['fn'][t])):
         w, h, k, w2c = md['w'], md['h'], md['k'][t][c], md['w2c'][t][c]
         cam = setup_camera(w, h, k, w2c, near=1.0, far=100)
         fn = md['fn'][t][c]
-        im = np.array(copy.deepcopy(Image.open(f"./data/{seq}/ims/{fn}")))
+        im = np.array(copy.deepcopy(Image.open(f"{data_dir}/{seq}/ims/{fn}")))
         im = torch.tensor(im).float().cuda().permute(2, 0, 1) / 255
-        seg = np.array(copy.deepcopy(Image.open(f"./data/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
+        seg = np.array(copy.deepcopy(Image.open(f"{data_dir}/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
         seg = torch.tensor(seg).float().cuda()
         seg_col = torch.stack((seg, torch.zeros_like(seg), 1 - seg))
         dataset.append({'cam': cam, 'im': im, 'seg': seg_col, 'id': c})
@@ -34,8 +35,8 @@ def get_batch(todo_dataset, dataset):
     return curr_data
 
 
-def initialize_params(seq, md):
-    init_pt_cld = np.load(f"./data/{seq}/init_pt_cld.npz")["data"]
+def initialize_params(seq, md, data_dir):
+    init_pt_cld = np.load(f"{data_dir}/{seq}/init_pt_cld.npz")["data"]
     seg = init_pt_cld[:, 6]
     max_cams = 50
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
@@ -184,17 +185,17 @@ def report_progress(params, data, i, progress_bar, every_i=100):
         progress_bar.update(every_i)
 
 
-def train(seq, exp):
-    if os.path.exists(f"./output/{exp}/{seq}"):
+def train(seq, exp, data_dir, output_dir):
+    if os.path.exists(f"{output_dir}/{exp}/{seq}"):
         print(f"Experiment '{exp}' for sequence '{seq}' already exists. Exiting.")
         return
-    md = json.load(open(f"./data/{seq}/train_meta.json", 'r'))  # metadata
+    md = json.load(open(f"{data_dir}/{seq}/train_meta.json", 'r'))  # metadata
     num_timesteps = len(md['fn'])
-    params, variables = initialize_params(seq, md)
+    params, variables = initialize_params(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
     for t in range(num_timesteps):
-        dataset = get_dataset(t, md, seq)
+        dataset = get_dataset(t, md, seq, data_dir)
         todo_dataset = []
         is_initial_timestep = (t == 0)
         if not is_initial_timestep:
@@ -215,11 +216,16 @@ def train(seq, exp):
         output_params.append(params2cpu(params, is_initial_timestep))
         if is_initial_timestep:
             variables = initialize_post_first_timestep(params, variables, optimizer)
-    save_params(output_params, seq, exp)
+    save_params(output_params, seq, exp, output_dir)
 
 
 if __name__ == "__main__":
-    exp_name = "exp1"
+    parser = ArgumentParser()
+    parser.add_argument("data_dir", type=str, default="./data", help="Path to the data directory")
+    parser.add_argument("exp_name", type=str, default="exp1", help="Experiment name")
+    parser.add_argument("output_dir", type=str, default="./output", help="Path to the output directory")
+    args = parser.parse_args()
+
     for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
-        train(sequence, exp_name)
+        train(sequence, args.exp_name, args.data_dir, args.output_dir)
         torch.cuda.empty_cache()

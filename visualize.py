@@ -1,4 +1,4 @@
-
+from argparse import ArgumentParser
 import torch
 import numpy as np
 import open3d as o3d
@@ -44,8 +44,8 @@ def init_camera(y_angle=0., center_dist=2.4, cam_height=1.3, f_ratio=0.82):
     return w2c, k
 
 
-def load_scene_data(seq, exp, seg_as_col=False):
-    params = dict(np.load(f"./output/{exp}/{seq}/params.npz"))
+def load_scene_data(seq, exp, output_dir, seg_as_col=False):
+    params = dict(np.load(f"{output_dir}/{exp}/{seq}/params.npz"))
     params = {k: torch.tensor(v).cuda().float() for k, v in params.items()}
     is_fg = params['seg_colors'][:, 0] > 0.5
     scene_data = []
@@ -137,8 +137,8 @@ def rgbd2pcd(im, depth, w2c, k, show_depth=False, project_to_cam_w_scale=None):
     return pts, cols
 
 
-def visualize(seq, exp):
-    scene_data, is_fg = load_scene_data(seq, exp)
+def visualize(seq, exp, output_dir):
+    scene_data, is_fg = load_scene_data(seq, exp, output_dir)
 
     vis = o3d.visualization.Visualizer()
     vis.create_window(width=int(w * view_scale), height=int(h * view_scale), visible=True)
@@ -233,6 +233,10 @@ def visualize(seq, exp):
 
 
 if __name__ == "__main__":
-    exp_name = "pretrained"
+    parser = ArgumentParser()
+    parser.add_argument("exp_name", type=str, default="pretrained", help="Experiment name")
+    parser.add_argument("output_dir", type=str, default="./output", help="Path to the output directory")
+    args = parser.parse_args()
+
     for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
-        visualize(sequence, exp_name)
+        visualize(sequence, args.exp_name, args.output_dir)
