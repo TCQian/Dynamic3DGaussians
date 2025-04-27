@@ -234,8 +234,8 @@ def visualize(seq, exp, output_dir):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("exp_name", type=str, default="pretrained", help="Experiment name")
-    parser.add_argument("output_dir", type=str, default="./output", help="Path to the output directory")
+    parser.add_argument("--exp-name", type=str, default="pretrained", help="Experiment name")
+    parser.add_argument("--output-dir", type=str, default="./output", help="Path to the output directory")
     args = parser.parse_args()
 
     for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:

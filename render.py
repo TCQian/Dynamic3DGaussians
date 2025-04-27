@@ -46,8 +46,8 @@ def tensor_to_image(im):
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument("exp_name", type=str, default="pretrained", help="Experiment name")
-    parser.add_argument("output_dir", type=str, default="./output", help="Path to the output directory")
+    parser.add_argument("--exp-name", type=str, default="pretrained", help="Experiment name")
+    parser.add_argument("--output-dir", type=str, default="./output", help="Path to the output directory")
     args = parser.parse_args()
     from open3d.visualization.rendering import OffscreenRenderer, MaterialRecord
 
