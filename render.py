@@ -125,11 +125,14 @@ if __name__ == "__main__":
     parser.add_argument("--exp-name", type=str, default="pretrained")
     parser.add_argument("--output-dir", type=Path, default=Path("./output"))
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="basketball",
+        choices=["basketball", "boxes", "football", "juggle", "softball", "tennis"],
+        help="Name of the dataset to use for training (e.g., basketball, boxes, etc.)",
+    )
     args = parser.parse_args()
 
-    for seq in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
-        print(f"\n=== Sequence: {seq} ===")
-        render_and_save(seq, args.exp_name, args.output_dir, args.data_dir)
-
-# Example usage:
-# python render.py --exp-name exp1 --output-dir ./output --data-dir ./data
+    print(f"\n=== Sequence: {args.dataset} ===")
+    render_and_save(args.dataset, args.exp_name, args.output_dir, args.data_dir)

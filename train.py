@@ -221,11 +221,22 @@ def train(seq, exp, data_dir, output_dir):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--data-dir", type=str, default="./data", help="Path to the data directory")
+    parser.add_argument(
+        "--data-dir", type=str, default="./data", help="Path to the data directory"
+    )
     parser.add_argument("--exp-name", type=str, default="exp1", help="Experiment name")
-    parser.add_argument("--output-dir", type=str, default="./output", help="Path to the output directory")
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default="./output",
+        help="Path to the output directory",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="basketball",
+        choices=["basketball", "boxes", "football", "juggle", "softball", "tennis"],
+        help="Name of the dataset to use for training (e.g., basketball, boxes, etc.)",
+    )
     args = parser.parse_args()
-
-    for sequence in ["basketball", "boxes", "football", "juggle", "softball", "tennis"]:
-        train(sequence, args.exp_name, args.data_dir, args.output_dir)
-        torch.cuda.empty_cache()
+    train(args.dataset, args.exp_name, args.data_dir, args.output_dir)
