@@ -1,5 +1,6 @@
 import json
 import shutil
+import time
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -92,11 +93,14 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
     base = out_dir / exp / seq / "test" / METHOD
     renders_dir = base / "renders"
     gt_dir = base / "gt"
+    fps_path = base / "fps.txt"
     renders_dir.mkdir(parents=True, exist_ok=True)
     gt_dir.mkdir(parents=True, exist_ok=True)
 
+    timings = []
     # 4) render + copy GT for each view
     for view in views:
+        ts = time.time()
         t, c, fn = view["t"], view["c"], view["fn"]
         data_vars = scene[t]  # pick the right timestep’s dict
 
@@ -105,6 +109,7 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
         with torch.no_grad():
             im, _, _ = Renderer(raster_settings=cam)(**data_vars)
 
+        timings.append(time.time() - ts)
         # convert and save render
         img = tensor_to_pil(im)
         name = f"{t:04d}_{c:04d}.png"
@@ -116,6 +121,11 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
         shutil.copy(src, dst)
 
         print(f"Saved render → {renders_dir/name}    GT → {gt_dir/name}")
+
+    # 5) save average FPS
+    with open(fps_path, 'w') as f:
+        total_time = sum(timings)
+        f.write("0") if total_time < 1e-5 else f.write(str(len(views) / total_time))
 
 
 if __name__ == "__main__":
