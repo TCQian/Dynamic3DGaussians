@@ -350,9 +350,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset-type",
         type=str,
-        default="original",
-        choices=["original", "dnerf"],
-        help="Type of dataset format: 'original' for the current format, 'dnerf' for D-NeRF format",
+        default="cmu",
+        choices=["cmu", "dnerf"],
+        help="Type of dataset format: 'cmu' for the current format, 'dnerf' for D-NeRF format",
     )
     args = parser.parse_args()
     train(

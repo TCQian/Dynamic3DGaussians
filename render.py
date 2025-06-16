@@ -9,6 +9,7 @@ import torch
 from diff_gaussian_rasterization import GaussianRasterizer as Renderer
 from PIL import Image
 
+from dnerf import load_dnerf_data
 from helpers import setup_camera
 
 # image size & camera clipping planes
@@ -60,9 +61,11 @@ def tensor_to_pil(im: torch.Tensor) -> Image.Image:
     return Image.fromarray(arr)
 
 
-def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
+def render_and_save(
+    seq: str, exp: str, out_dir: Path, data_dir: Path, dataset_type: str = "cmu"
+):
     """
-    For each (timestep, view) in train_meta.json:
+    For each (timestep, view) in train_meta.json or D-NeRF transforms:
       1. grab scene[t]
       2. render with that view's (k, w2c)
       3. save to .../test/METHOD/renders/<t>_<c>.png
@@ -72,9 +75,16 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
     scene = load_scene_data(seq, exp, out_dir)
 
     # 2) load metadata & build flat list of views
-    meta_path = data_dir / seq / "train_meta.json"
-    with open(meta_path, "r") as f:
-        meta = json.load(f)
+    if dataset_type == "dnerf":
+        # Load D-NeRF data
+        meta = load_dnerf_data(str(data_dir), seq)
+        img_dir = "train"  # D-NeRF images are typically in train/ folder
+    else:
+        # Load cmu format
+        meta_path = data_dir / seq / "train_meta.json"
+        with open(meta_path, "r") as f:
+            meta = json.load(f)
+        img_dir = "ims"  # Original format images are in ims/ folder
 
     views = []
     for t, (fns, ks, w2cs) in enumerate(zip(meta["fn"], meta["k"], meta["w2c"])):
@@ -86,6 +96,7 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
                     "fn": fn,
                     "k": np.array(ks[c]),
                     "w2c": np.array(w2cs[c]),
+                    "img_dir": img_dir,
                 }
             )
 
@@ -116,7 +127,14 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
         img.save(renders_dir / name)
 
         # copy the matching ground-truth image
-        src = data_dir / seq / "ims" / fn
+        img_dir = view["img_dir"]
+        if dataset_type == "dnerf":
+            # For D-NeRF, fn already contains the path like "train/r_000.png"
+            src = data_dir / seq / fn
+        else:
+            # For cmu format, fn is just the filename
+            src = data_dir / seq / img_dir / fn
+
         dst = gt_dir / name
         shutil.copy(src, dst)
 
@@ -139,10 +157,18 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="basketball",
-        choices=["basketball", "boxes", "football", "juggle", "softball", "tennis"],
-        help="Name of the dataset to use for training (e.g., basketball, boxes, etc.)",
+        help="Name of the dataset to use for rendering (e.g., basketball, boxes, bouncingballs, etc.)",
+    )
+    parser.add_argument(
+        "--dataset-type",
+        type=str,
+        default="cmu",
+        choices=["cmu", "dnerf"],
+        help="Type of dataset format: 'cmu' for the current format, 'dnerf' for D-NeRF format",
     )
     args = parser.parse_args()
 
     print(f"\n=== Sequence: {args.dataset} ===")
-    render_and_save(args.dataset, args.exp_name, args.output_dir, args.data_dir)
+    render_and_save(
+        args.dataset, args.exp_name, args.output_dir, args.data_dir, args.dataset_type
+    )
