@@ -82,6 +82,11 @@ def render_and_save(
         img_dir = "train"  # D-NeRF images are typically in train/ folder
         # Use default near/far for D-NeRF
         render_near, render_far = near, far
+
+        # Use detected image dimensions from D-NeRF data
+        global w, h
+        w, h = meta['w'], meta['h']
+        print(f"D-NeRF detected dimensions: Using image dimensions: {w}x{h}")
     elif dataset_type == "hypernerf":
         # Load HyperNeRF data
         meta = load_hypernerf_data(str(data_dir), seq)
