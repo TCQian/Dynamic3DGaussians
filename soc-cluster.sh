@@ -10,4 +10,4 @@
 source ~/.bashrc
 conda activate 3dg
 
-python train.py --dataset-type dnerf
+python train.py --data-dir ./data/dnerf --exp-name dnerf --dataset bouncingballs --dataset-type dnerf

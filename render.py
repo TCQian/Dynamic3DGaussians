@@ -11,6 +11,7 @@ from PIL import Image
 
 from dnerf import load_dnerf_data
 from helpers import setup_camera
+from hypernerf import load_hypernerf_data
 
 # image size & camera clipping planes
 w, h = 640, 360
@@ -65,7 +66,7 @@ def render_and_save(
     seq: str, exp: str, out_dir: Path, data_dir: Path, dataset_type: str = "cmu"
 ):
     """
-    For each (timestep, view) in train_meta.json or D-NeRF transforms:
+    For each (timestep, view) in train_meta.json, D-NeRF transforms, or HyperNeRF dataset:
       1. grab scene[t]
       2. render with that view's (k, w2c)
       3. save to .../test/METHOD/renders/<t>_<c>.png
@@ -79,12 +80,38 @@ def render_and_save(
         # Load D-NeRF data
         meta = load_dnerf_data(str(data_dir), seq)
         img_dir = "train"  # D-NeRF images are typically in train/ folder
+        # Use default near/far for D-NeRF
+        render_near, render_far = near, far
+    elif dataset_type == "hypernerf":
+        # Load HyperNeRF data
+        meta = load_hypernerf_data(str(data_dir), seq)
+        img_dir = ""  # HyperNeRF images paths are relative to dataset root
+
+        # Use scene-specific near/far planes from HyperNeRF
+        scene_info = meta.get('scene_info', {})
+        render_near = scene_info.get('near', near)
+        render_far = scene_info.get('far', far)
+
+        print(f"HyperNeRF scene parameters:")
+        print(f"  Scale: {scene_info.get('scale', 1.0)}")
+        print(f"  Center: {scene_info.get('center', [0, 0, 0])}")
+        print(f"  Using near/far: {render_near:.6f} / {render_far:.6f}")
+
+        # Use scene-specific image dimensions if available
+        if scene_info:
+            # For HyperNeRF, we should use the actual image dimensions from the dataset
+            # Get dimensions from the first camera file or use detected dimensions
+            global w, h
+            w, h = meta['w'], meta['h']
+            print(f"  Using image dimensions: {w}x{h}")
     else:
         # Load cmu format
         meta_path = data_dir / seq / "train_meta.json"
         with open(meta_path, "r") as f:
             meta = json.load(f)
         img_dir = "ims"  # Original format images are in ims/ folder
+        # Use default near/far for CMU format
+        render_near, render_far = near, far
 
     views = []
     for t, (fns, ks, w2cs) in enumerate(zip(meta["fn"], meta["k"], meta["w2c"])):
@@ -108,15 +135,21 @@ def render_and_save(
     renders_dir.mkdir(parents=True, exist_ok=True)
     gt_dir.mkdir(parents=True, exist_ok=True)
 
+    print(
+        f"Rendering {len(views)} views with near={render_near:.6f}, far={render_far:.6f}"
+    )
+
     timings = []
     # 4) render + copy GT for each view
     for view in views:
         ts = time.time()
         t, c, fn = view["t"], view["c"], view["fn"]
-        data_vars = scene[t]  # pick the right timestep’s dict
+        data_vars = scene[t]  # pick the right timestep's dict
 
-        # build camera & render
-        cam = setup_camera(w, h, view["k"], view["w2c"], near=near, far=far)
+        # build camera & render with scene-specific near/far
+        cam = setup_camera(
+            w, h, view["k"], view["w2c"], near=render_near, far=render_far
+        )
         with torch.no_grad():
             im, _, _ = Renderer(raster_settings=cam)(**data_vars)
 
@@ -131,6 +164,9 @@ def render_and_save(
         if dataset_type == "dnerf":
             # For D-NeRF, fn already contains the path like "train/r_000.png"
             src = data_dir / seq / fn
+        elif dataset_type == "hypernerf":
+            # For HyperNeRF, fn contains the relative path from dataset root
+            src = data_dir / seq / fn
         else:
             # For cmu format, fn is just the filename
             src = data_dir / seq / img_dir / fn
@@ -144,6 +180,8 @@ def render_and_save(
     with open(fps_path, 'w') as f:
         total_time = sum(timings)
         f.write("0") if total_time < 1e-5 else f.write(str(len(views) / total_time))
+
+    print(f"Rendering complete! Average FPS: {len(views) / sum(timings):.2f}")
 
 
 if __name__ == "__main__":
@@ -163,8 +201,8 @@ if __name__ == "__main__":
         "--dataset-type",
         type=str,
         default="cmu",
-        choices=["cmu", "dnerf"],
-        help="Type of dataset format: 'cmu' for the current format, 'dnerf' for D-NeRF format",
+        choices=["cmu", "dnerf", "hypernerf"],
+        help="Type of dataset format: 'cmu' for the current format, 'dnerf' for D-NeRF format, 'hypernerf' for HyperNeRF format",
     )
     args = parser.parse_args()
 

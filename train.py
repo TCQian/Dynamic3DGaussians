@@ -30,6 +30,11 @@ from helpers import (
     weighted_l2_loss_v1,
     weighted_l2_loss_v2,
 )
+from hypernerf import (
+    get_dataset_hypernerf,
+    initialize_params_hypernerf,
+    load_hypernerf_data,
+)
 
 
 def get_dataset(t, md, seq, data_dir):
@@ -280,7 +285,7 @@ def report_progress(params, data, i, progress_bar, every_i=100):
         progress_bar.update(every_i)
 
 
-def train(seq, exp, data_dir, output_dir, dataset_type="original"):
+def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     if os.path.exists(f"{output_dir}/{exp}/{seq}"):
         print(f"Experiment '{exp}' for sequence '{seq}' already exists. Exiting.")
         return
@@ -291,13 +296,30 @@ def train(seq, exp, data_dir, output_dir, dataset_type="original"):
         get_dataset_func = get_dataset_dnerf
         initialize_params_func = initialize_params_dnerf
         print(f"Loading D-NeRF dataset: {seq}")
+    elif dataset_type == "hypernerf":
+        md = load_hypernerf_data(data_dir, seq)
+        get_dataset_func = get_dataset_hypernerf
+        initialize_params_func = initialize_params_hypernerf
+        print(f"Loading HyperNeRF dataset: {seq}")
+
+        # Print HyperNeRF scene information
+        scene_info = md.get('scene_info', {})
+        if scene_info:
+            print(f"HyperNeRF scene parameters:")
+            print(f"  Scale: {scene_info.get('scale', 1.0)}")
+            print(f"  Center: {scene_info.get('center', [0, 0, 0])}")
+            print(
+                f"  Near/Far: {scene_info.get('near', 1.0):.6f} / {scene_info.get('far', 100.0):.6f}"
+            )
     else:
         md = json.load(open(f"{data_dir}/{seq}/train_meta.json", 'r'))  # metadata
         get_dataset_func = get_dataset
         initialize_params_func = initialize_params
-        print(f"Loading original dataset: {seq}")
+        print(f"Loading CMU dataset: {seq}")
 
     num_timesteps = len(md['fn'])
+    print(f"Training on {num_timesteps} timesteps")
+
     params, variables = initialize_params_func(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
@@ -351,8 +373,8 @@ if __name__ == "__main__":
         "--dataset-type",
         type=str,
         default="cmu",
-        choices=["cmu", "dnerf"],
-        help="Type of dataset format: 'cmu' for the current format, 'dnerf' for D-NeRF format",
+        choices=["cmu", "dnerf", "hypernerf"],
+        help="Type of dataset format: 'cmu' for the current format, 'dnerf' for D-NeRF format, 'hypernerf' for HyperNeRF format",
     )
     args = parser.parse_args()
     train(
