@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=3DG                   # Job name
+#SBATCH --job-name=3DG-dnerf              # Job name
 #SBATCH --time=12:00:00                   # Time limit hrs:min:sec
 #SBATCH --gres=gpu:a100-40:1             # must use this GPU, since pytorch3d relied on it
 #SBATCH --mail-type=ALL                  # Get email for all status updates
@@ -10,4 +10,4 @@
 source ~/.bashrc
 conda activate 3dg
 
-python train.py
+python train.py --dataset-type dnerf
