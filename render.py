@@ -72,6 +72,8 @@ def render_and_save(
       3. save to .../test/METHOD/renders/<t>_<c>.png
       4. copy GT from data_dir/.../ims/<fn> → .../test/METHOD/gt/<t>_<c>.png
     """
+    global w, h
+
     # 1) load scene data (length = # timesteps)
     scene = load_scene_data(seq, exp, out_dir)
 
@@ -84,7 +86,6 @@ def render_and_save(
         render_near, render_far = near, far
 
         # Use detected image dimensions from D-NeRF data
-        global w, h
         w, h = meta['w'], meta['h']
         print(f"D-NeRF detected dimensions: Using image dimensions: {w}x{h}")
     elif dataset_type == "hypernerf":
@@ -106,7 +107,6 @@ def render_and_save(
         if scene_info:
             # For HyperNeRF, we should use the actual image dimensions from the dataset
             # Get dimensions from the first camera file or use detected dimensions
-            global w, h
             w, h = meta['w'], meta['h']
             print(f"  Using image dimensions: {w}x{h}")
     else:
