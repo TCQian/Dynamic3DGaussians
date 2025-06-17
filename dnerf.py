@@ -30,33 +30,20 @@ def load_dnerf_data(data_dir, seq):
             h = img.height
             print(f"Detected image dimensions from {img_path}: {w}x{h}")
 
-    # Use defaults if image loading failed
-    if 'w' not in locals() or 'h' not in locals():
-        w = 800
-        h = 600
-        print(f"Using default dimensions: {w}x{h}")
+    else:
+        raise ValueError("Could not determine image dimensions from D-NeRF data")
 
     # Extract camera intrinsics (assuming all frames share the same camera)
     camera_angle_x = transforms.get('camera_angle_x', None)
 
-    if camera_angle_x is not None:
+    if camera_angle_x:
         focal = 0.5 * w / np.tan(0.5 * camera_angle_x)
         k = [[focal, 0, w / 2], [0, focal, h / 2], [0, 0, 1]]
         print(
             f"Using camera_angle_x: {camera_angle_x:.4f} rad, focal length: {focal:.2f}"
         )
     else:
-        # Try to get focal length directly
-        fl_x = transforms.get('fl_x', None)
-        fl_y = transforms.get('fl_y', None)
-        cx = transforms.get('cx', w / 2)
-        cy = transforms.get('cy', h / 2)
-
-        if fl_x is not None and fl_y is not None:
-            k = [[fl_x, 0, cx], [0, fl_y, cy], [0, 0, 1]]
-            print(f"Using fl_x: {fl_x}, fl_y: {fl_y}")
-        else:
-            raise ValueError("Could not determine camera intrinsics from D-NeRF data")
+        raise ValueError("Could not determine camera intrinsics from D-NeRF data")
 
     # Group frames by time
     frames_by_time = {}
@@ -171,7 +158,9 @@ def initialize_params_dnerf(seq, md, data_dir):
     )
 
     seg = init_pt_cld[:, 6]
-    max_cams = max(50, len(cam_centers))
+    # Calculate max cameras per timestep (not total across all timesteps)
+    max_cams_per_timestep = max(len(md['fn'][t]) for t in range(len(md['fn'])))
+    max_cams = max(50, max_cams_per_timestep)
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
 

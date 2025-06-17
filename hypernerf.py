@@ -337,7 +337,9 @@ def initialize_params_hypernerf(seq, md, data_dir):
     )
 
     seg = init_pt_cld[:, 6]
-    max_cams = max(50, len(cam_centers))
+    # Calculate max cameras per timestep (not total across all timesteps)
+    max_cams_per_timestep = max(len(md['fn'][t]) for t in range(len(md['fn'])))
+    max_cams = max(50, max_cams_per_timestep)
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
 
