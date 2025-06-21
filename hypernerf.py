@@ -328,15 +328,20 @@ def initialize_params_hypernerf(seq, md, data_dir):
     # Initialize with gray colors
     colors = np.ones((num_points, 3)) * 0.5
 
-    init_pt_cld = np.column_stack(
-        [
-            points,
-            colors,
-            np.ones(num_points),  # segmentation (all foreground)
-        ]
-    )
+    # Create a more realistic foreground/background split
+    # Points closer to scene center are more likely to be foreground
+    distances_to_center = np.linalg.norm(points - computed_center, axis=1)
+    # Use a probability based on distance - closer points more likely to be foreground
+    fg_prob = np.exp(-distances_to_center / (scene_radius * 0.5))
+    seg = (np.random.random(num_points) < fg_prob).astype(float)
+    # Ensure at least 60% are foreground for better training
+    if seg.mean() < 0.6:
+        n_fg_needed = int(0.6 * num_points) - int(seg.sum())
+        bg_indices = np.where(seg == 0)[0]
+        if len(bg_indices) >= n_fg_needed:
+            seg[bg_indices[:n_fg_needed]] = 1.0
 
-    seg = init_pt_cld[:, 6]
+    init_pt_cld = np.column_stack([points, colors, seg])
     # Calculate max cameras per timestep (not total across all timesteps)
     max_cams_per_timestep = max(len(md['fn'][t]) for t in range(len(md['fn'])))
     max_cams = max(50, max_cams_per_timestep)
@@ -370,5 +375,6 @@ def initialize_params_hypernerf(seq, md, data_dir):
         .cuda()
         .float(),
         'denom': torch.zeros(params['means3D'].shape[0]).cuda().float(),
+        'is_random_init': True,  # Mark as using random initialization
     }
     return params, variables

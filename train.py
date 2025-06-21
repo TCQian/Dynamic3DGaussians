@@ -193,16 +193,33 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
             params['rgb_colors'], variables["prev_col"]
         )
 
-    loss_weights = {
-        'im': 1.0,
-        'seg': 3.0,
-        'rigid': 4.0,
-        'rot': 4.0,
-        'iso': 2.0,
-        'floor': 2.0,
-        'bg': 20.0,
-        'soft_col_cons': 0.01,
-    }
+    # Determine if we're using D-NeRF or HyperNeRF (indicated by random initialization)
+    is_random_init = variables.get('is_random_init', False)
+
+    if is_random_init:
+        # Much lighter regularization for D-NeRF/HyperNeRF with random initialization
+        loss_weights = {
+            'im': 1.0,
+            'seg': 3.0,
+            'rigid': 0.1,  # Much lighter - allow points to move freely
+            'rot': 0.1,  # Much lighter - allow rotations to change
+            'iso': 0.05,  # Much lighter - allow distances to change
+            'floor': 0.05,  # Much lighter - floor constraint barely enforced
+            'bg': 0.5,  # Much lighter - background can move more
+            'soft_col_cons': 0.01,
+        }
+    else:
+        # Original weights for CMU dataset
+        loss_weights = {
+            'im': 1.0,
+            'seg': 3.0,
+            'rigid': 4.0,
+            'rot': 4.0,
+            'iso': 2.0,
+            'floor': 2.0,
+            'bg': 20.0,
+            'soft_col_cons': 0.01,
+        }
     loss = sum([loss_weights[k] * v for k, v in losses.items()])
     seen = radius > 0
     variables['max_2D_radius'][seen] = torch.max(
@@ -215,8 +232,22 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
 def initialize_per_timestep(params, variables, optimizer):
     pts = params['means3D']
     rot = torch.nn.functional.normalize(params['unnorm_rotations'])
-    new_pts = pts + (pts - variables["prev_pts"])
-    new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
+
+    # For random initialization (D-NeRF/HyperNeRF), use much gentler motion prediction
+    is_random_init = variables.get('is_random_init', False)
+    if is_random_init:
+        # Use minimal motion - just small random perturbation
+        motion_scale = 0.01 * variables['scene_radius']
+        random_motion = torch.randn_like(pts) * motion_scale
+        new_pts = pts + random_motion
+
+        # Minimal rotation change
+        rot_noise = torch.randn_like(rot) * 0.01
+        new_rot = torch.nn.functional.normalize(rot + rot_noise)
+    else:
+        # Original linear extrapolation for CMU datasets
+        new_pts = pts + (pts - variables["prev_pts"])
+        new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
 
     is_fg = params['seg_colors'][:, 0] > 0.5
     prev_inv_rot_fg = rot[is_fg]
@@ -330,7 +361,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         is_initial_timestep = t == 0
         if not is_initial_timestep:
             params, variables = initialize_per_timestep(params, variables, optimizer)
-        num_iter_per_timestep = 10000 if is_initial_timestep else 2000
+        num_iter_per_timestep = 10000 if is_initial_timestep else 8000
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
