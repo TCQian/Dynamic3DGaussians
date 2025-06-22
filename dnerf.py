@@ -159,7 +159,7 @@ def initialize_params_dnerf(seq, md, data_dir):
     scene_radius = np.max(np.linalg.norm(cam_centers - scene_center, axis=1))
 
     # Generate random points in a cube around the scene
-    num_points = 2000
+    num_points = 3000
     print(f"Generating random point cloud ({num_points})...")
 
     # Create random points in a cube centered at scene_center

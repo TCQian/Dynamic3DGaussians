@@ -232,31 +232,8 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
 def initialize_per_timestep(params, variables, optimizer):
     pts = params['means3D']
     rot = torch.nn.functional.normalize(params['unnorm_rotations'])
-
-    # For random initialization (D-NeRF/HyperNeRF), use much gentler motion prediction
-    is_random_init = variables.get('is_random_init', False)
-    if is_random_init:
-        # For the first few timesteps, don't predict motion at all - just keep current positions
-        current_timestep = variables.get('current_timestep', 1)
-        if current_timestep <= 3:  # First 3 timesteps: no motion prediction
-            new_pts = pts.clone()
-            new_rot = rot.clone()
-            print(
-                f"Timestep {current_timestep}: No motion prediction (stabilization phase)"
-            )
-        else:
-            # After stabilization, use minimal motion
-            motion_scale = 0.005 * variables['scene_radius']  # Even smaller motion
-            random_motion = torch.randn_like(pts) * motion_scale
-            new_pts = pts + random_motion
-
-            # Minimal rotation change
-            rot_noise = torch.randn_like(rot) * 0.005  # Smaller rotation noise
-            new_rot = torch.nn.functional.normalize(rot + rot_noise)
-    else:
-        # Original linear extrapolation for CMU datasets
-        new_pts = pts + (pts - variables["prev_pts"])
-        new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
+    new_pts = pts + (pts - variables["prev_pts"])
+    new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
 
     is_fg = params['seg_colors'][:, 0] > 0.5
     prev_inv_rot_fg = rot[is_fg]
@@ -369,10 +346,8 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         todo_dataset = []
         is_initial_timestep = t == 0
         if not is_initial_timestep:
-            # Track current timestep for motion prediction
-            variables['current_timestep'] = t
             params, variables = initialize_per_timestep(params, variables, optimizer)
-        num_iter_per_timestep = 10000 if is_initial_timestep else 3000
+        num_iter_per_timestep = 10000 if is_initial_timestep else 2000
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
