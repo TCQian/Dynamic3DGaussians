@@ -45,39 +45,54 @@ def load_dnerf_data(data_dir, seq):
     else:
         raise ValueError("Could not determine camera intrinsics from D-NeRF data")
 
-    # Group frames by time
-    frames_by_time = {}
-    for frame in transforms['frames']:
-        time = frame.get('time', 0.0)  # default to time 0 if not specified
-        if time not in frames_by_time:
-            frames_by_time[time] = []
-        frames_by_time[time].append(frame)
+    # Get all frames and create proper time mapping like the reference
+    all_frames = transforms['frames']
 
-    # Sort times
-    sorted_times = sorted(frames_by_time.keys())
+    # Create time mapper - map unique time values to sequential indices
+    unique_times = sorted(list(set(frame.get('time', 0.0) for frame in all_frames)))
+    time_mapper = {time_val: idx for idx, time_val in enumerate(unique_times)}
+
     print(
-        f"Found {len(transforms['frames'])} frames across {len(sorted_times)} time steps"
+        f"Found {len(all_frames)} frames across {len(unique_times)} unique time values"
     )
-    print(f"Time range: {min(sorted_times):.3f} - {max(sorted_times):.3f}")
+    print(f"Time range: {min(unique_times):.3f} - {max(unique_times):.3f}")
+
+    # Group frames by mapped time indices
+    frames_by_timestep = {}
+    for frame in all_frames:
+        frame_time = frame.get('time', 0.0)
+        timestep = time_mapper[frame_time]
+        if timestep not in frames_by_timestep:
+            frames_by_timestep[timestep] = []
+        frames_by_timestep[timestep].append(frame)
 
     # Convert to expected format
     fn = []
     w2c_list = []
     k_list = []
 
-    for time in sorted_times:
+    for timestep in sorted(frames_by_timestep.keys()):
         time_fn = []
         time_w2c = []
         time_k = []
 
-        for frame in frames_by_time[time]:
+        for frame in frames_by_timestep[timestep]:
             # Get filename with path
             file_path = frame['file_path'] + '.png'
             time_fn.append(file_path)
 
-            # Convert transform matrix to w2c
+            # Convert transform matrix to w2c following reference implementation
             c2w = np.array(frame['transform_matrix'])
-            w2c = np.linalg.inv(c2w)
+            # Apply the same transformations as reference
+            matrix = np.linalg.inv(c2w)
+            R = -np.transpose(matrix[:3, :3])
+            R[:, 0] = -R[:, 0]
+            T = -matrix[:3, 3]
+
+            # Reconstruct w2c matrix
+            w2c = np.eye(4)
+            w2c[:3, :3] = R
+            w2c[:3, 3] = T
             time_w2c.append(w2c.tolist())
 
             # Camera intrinsics (same for all frames)
@@ -88,6 +103,7 @@ def load_dnerf_data(data_dir, seq):
         k_list.append(time_k)
 
     md = {'fn': fn, 'w': w, 'h': h, 'k': k_list, 'w2c': w2c_list}
+    print(f"Loaded {len(fn)} timesteps for D-NeRF training")
 
     return md
 
@@ -105,13 +121,17 @@ def get_dataset_dnerf(t, md, seq, data_dir):
         if not os.path.exists(img_path):
             raise FileNotFoundError(f"Image file not found: {img_path}")
 
-        im = np.array(copy.deepcopy(Image.open(img_path)))
-        # Handle RGBA images
-        if im.shape[-1] == 4:
-            # Use alpha channel as mask and blend with white background
-            alpha = im[:, :, 3:4] / 255.0
-            im = im[:, :, :3] * alpha + 255 * (1 - alpha)
-            im = im.astype(np.uint8)
+        # Load and process image following reference implementation
+        image = Image.open(img_path)
+        im_data = np.array(image.convert("RGBA"))
+
+        # Handle alpha blending like reference (white background for D-NeRF)
+        bg = np.array([1, 1, 1])  # white background
+        norm_data = im_data / 255.0
+        arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (
+            1 - norm_data[:, :, 3:4]
+        )
+        im = np.array(arr * 255.0, dtype=np.uint8)
 
         im = torch.tensor(im).float().cuda().permute(2, 0, 1) / 255
 

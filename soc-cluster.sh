@@ -10,5 +10,5 @@
 source ~/.bashrc
 conda activate 3dg
 
-python train.py --data-dir ./data/dnerf --exp-name dnerf --dataset bouncingballs --dataset-type dnerf
-python render.py --data-dir ./data/dnerf --exp-name dnerf --dataset bouncingballs --dataset-type dnerf
+python train.py --data-dir ./data/dnerf --exp-name dnerf_attempt --dataset bouncingballs --dataset-type dnerf
+python render.py --data-dir ./data/dnerf --exp-name dnerf_attempt --dataset bouncingballs --dataset-type dnerf
