@@ -163,8 +163,8 @@ def initialize_params_dnerf(seq, md, data_dir):
     print(f"Generating random point cloud ({num_points})...")
 
     # Create random points in a cube centered at scene_center
-    points = np.random.random((num_points, 3)) * 2.6 - 1.3
-    points = points * scene_radius * 0.8 + scene_center
+    points = np.random.random((num_points, 3)) * 1.2 - 0.6
+    points = points * scene_radius * 0.4 + scene_center
 
     # Initialize with gray colors
     colors = np.ones((num_points, 3)) * 0.5
@@ -183,9 +183,7 @@ def initialize_params_dnerf(seq, md, data_dir):
             seg[bg_indices[:n_fg_needed]] = 1.0
 
     init_pt_cld = np.column_stack([points, colors, seg])
-    # Calculate max cameras per timestep (not total across all timesteps)
-    max_cams_per_timestep = max(len(md['fn'][t]) for t in range(len(md['fn'])))
-    max_cams = max(50, max_cams_per_timestep)
+    max_cams = 1  # Only 1 camera per timestep for D-NeRF
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
 
