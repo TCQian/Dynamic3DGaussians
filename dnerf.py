@@ -206,7 +206,7 @@ def initialize_params_dnerf(seq, md, data_dir):
         for k, v in params.items()
     }
 
-    scene_radius = 1.1 * np.max(
+    scene_radius = 0.5 * np.max(
         np.linalg.norm(cam_centers - np.mean(cam_centers, 0)[None], axis=-1)
     )
     variables = {

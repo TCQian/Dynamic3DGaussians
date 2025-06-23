@@ -202,7 +202,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
             'im': 1.0,
             'seg': 3.0,
             'rigid': 0.1,  # Much lighter - allow points to move freely
-            'rot': 0.1,  # Much lighter - allow rotations to change
+            'rot': 0.05,  # Much lighter - allow rotations to change
             'iso': 0.05,  # Much lighter - allow distances to change
             'floor': 0.05,  # Much lighter - floor constraint barely enforced
             'bg': 0.5,  # Much lighter - background can move more
@@ -232,8 +232,14 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
 def initialize_per_timestep(params, variables, optimizer):
     pts = params['means3D']
     rot = torch.nn.functional.normalize(params['unnorm_rotations'])
-    new_pts = pts + (pts - variables["prev_pts"])
-    new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
+    if variables.get('is_random_init', False):
+        new_pts = pts + (pts - variables["prev_pts"]) * 0.005
+        new_rot = torch.nn.functional.normalize(
+            rot + (rot - variables["prev_rot"]) * 0.005
+        )
+    else:
+        new_pts = pts + (pts - variables["prev_pts"])
+        new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
 
     is_fg = params['seg_colors'][:, 0] > 0.5
     prev_inv_rot_fg = rot[is_fg]
