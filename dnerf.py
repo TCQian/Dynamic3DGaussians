@@ -183,7 +183,10 @@ def initialize_params_dnerf(seq, md, data_dir):
             seg[bg_indices[:n_fg_needed]] = 1.0
 
     init_pt_cld = np.column_stack([points, colors, seg])
-    max_cams = 1  # Only 1 camera per timestep for D-NeRF
+    # Calculate max cameras per timestep based on actual data
+    max_cams_per_timestep = max(len(md['fn'][t]) for t in range(len(md['fn'])))
+    max_cams = max(10, max_cams_per_timestep)  # At least 10 camera
+    print(f"Max cameras per timestep: {max_cams}")
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
 
