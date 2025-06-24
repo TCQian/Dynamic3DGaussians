@@ -156,37 +156,101 @@ def initialize_params_dnerf(seq, md, data_dir):
 
     cam_centers = np.array(cam_centers)
     scene_center = np.mean(cam_centers, axis=0)
+
+    # Use consistent scene radius calculation throughout
     scene_radius = np.max(np.linalg.norm(cam_centers - scene_center, axis=1))
 
-    # Generate random points in a cube around the scene
-    num_points = 3000
+    print(
+        f"Camera positions range: {cam_centers.min(axis=0)} to {cam_centers.max(axis=0)}"
+    )
+    print(f"Scene center: {scene_center}")
+    print(f"Scene radius: {scene_radius}")
+
+    # Generate more points for better coverage of dynamic scenes
+    num_points = 5000  # Increased from 3000
     print(f"Generating random point cloud ({num_points})...")
 
-    # Create random points in a cube centered at scene_center
-    points = np.random.random((num_points, 3)) * 2.6 - 1.3
-    points = points * scene_radius * 0.8 + scene_center
+    # Create better distributed points using multiple strategies
+    # 1) Points distributed in a sphere around scene center (better than cube)
+    points_sphere = np.random.randn(num_points // 2, 3)
+    points_sphere = points_sphere / np.linalg.norm(points_sphere, axis=1, keepdims=True)
+    # Distribute points within scene radius with more density near center
+    radii = (
+        np.random.beta(2, 5, num_points // 2) * scene_radius * 1.2
+    )  # Beta distribution favors smaller radii
+    points_sphere = points_sphere * radii.reshape(-1, 1) + scene_center
 
-    # Initialize with gray colors
-    colors = np.ones((num_points, 3)) * 0.5
+    # 2) Points distributed along camera ray directions for better scene coverage
+    ray_points = []
+    n_ray_points = num_points // 2
+    for i in range(min(len(cam_centers), n_ray_points)):
+        cam_pos = cam_centers[i % len(cam_centers)]
+        # Create points along the ray from camera to scene center
+        direction = scene_center - cam_pos
+        direction = direction / np.linalg.norm(direction)
+        # Distribute points at various distances along the ray
+        distances = (
+            np.random.uniform(0.1, 2.0, n_ray_points // len(cam_centers) + 1)
+            * scene_radius
+        )
+        for dist in distances[: n_ray_points // len(cam_centers) + 1]:
+            if len(ray_points) < n_ray_points:
+                point = cam_pos + direction * dist
+                ray_points.append(point)
 
-    # Create a more realistic foreground/background split
-    # Points closer to scene center are more likely to be foreground
+    ray_points = np.array(ray_points[:n_ray_points])
+
+    # Combine both point distributions
+    if len(ray_points) > 0:
+        points = np.vstack([points_sphere, ray_points])
+    else:
+        points = points_sphere
+
+    # Trim to exact number needed
+    points = points[:num_points]
+
+    # Initialize with more varied colors (not just gray)
+    colors = np.random.uniform(0.3, 0.7, (num_points, 3))  # Varied colors
+
+    # Create a more sophisticated foreground/background split
     distances_to_center = np.linalg.norm(points - scene_center, axis=1)
-    # Use a probability based on distance - closer points more likely to be foreground
-    fg_prob = np.exp(-distances_to_center / (scene_radius * 0.5))
+
+    # Use sigmoid-based probability for smoother transition
+    # Points closer to cameras and scene center are more likely to be foreground
+    min_cam_dist = np.min(
+        [np.linalg.norm(points - cam_pos, axis=1) for cam_pos in cam_centers], axis=0
+    )
+
+    # Combine center distance and camera distance for better fg/bg classification
+    center_prob = 1 / (
+        1 + np.exp((distances_to_center - scene_radius * 0.6) / (scene_radius * 0.1))
+    )
+    camera_prob = 1 / (
+        1 + np.exp((min_cam_dist - scene_radius * 0.8) / (scene_radius * 0.1))
+    )
+    fg_prob = 0.7 * center_prob + 0.3 * camera_prob
+
     seg = (np.random.random(num_points) < fg_prob).astype(float)
-    # Ensure at least 60% are foreground for better training
-    if seg.mean() < 0.6:
-        n_fg_needed = int(0.6 * num_points) - int(seg.sum())
+
+    # Ensure at least 70% are foreground for better dynamic scene representation
+    if seg.mean() < 0.7:
+        n_fg_needed = int(0.7 * num_points) - int(seg.sum())
         bg_indices = np.where(seg == 0)[0]
         if len(bg_indices) >= n_fg_needed:
-            seg[bg_indices[:n_fg_needed]] = 1.0
+            # Prioritize points closer to scene center for foreground
+            bg_distances = distances_to_center[bg_indices]
+            closest_bg_indices = bg_indices[np.argsort(bg_distances)[:n_fg_needed]]
+            seg[closest_bg_indices] = 1.0
+
+    print(f"Foreground ratio: {seg.mean():.3f}")
 
     init_pt_cld = np.column_stack([points, colors, seg])
+
     # Calculate max cameras per timestep based on actual data
     max_cams_per_timestep = max(len(md['fn'][t]) for t in range(len(md['fn'])))
-    max_cams = max(10, max_cams_per_timestep)  # At least 10 camera
+    max_cams = max(10, max_cams_per_timestep)  # At least 10 cameras
     print(f"Max cameras per timestep: {max_cams}")
+
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
 
@@ -207,12 +271,13 @@ def initialize_params_dnerf(seq, md, data_dir):
         for k, v in params.items()
     }
 
-    scene_radius = 0.5 * np.max(
-        np.linalg.norm(cam_centers - np.mean(cam_centers, 0)[None], axis=-1)
+    # Use consistent scene radius calculation (same as above)
+    scene_radius_final = 1.1 * np.max(
+        np.linalg.norm(cam_centers - scene_center, axis=1)
     )
     variables = {
         'max_2D_radius': torch.zeros(params['means3D'].shape[0]).cuda().float(),
-        'scene_radius': scene_radius,
+        'scene_radius': scene_radius_final,
         'means2D_gradient_accum': torch.zeros(params['means3D'].shape[0])
         .cuda()
         .float(),

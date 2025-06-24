@@ -233,14 +233,31 @@ def initialize_per_timestep(params, variables, optimizer):
     pts = params['means3D']
     rot = torch.nn.functional.normalize(params['unnorm_rotations'])
     if variables.get('is_random_init', False):
-        # After stabilization, use minimal motion
-        motion_scale = 0.005 * variables['scene_radius']  # Even smaller motion
-        random_motion = torch.randn_like(pts) * motion_scale
-        new_pts = pts + random_motion
+        # For random initialization, use adaptive motion based on timestep
+        if 'prev_pts' in variables:
+            # Use previous motion for continuity, but with some randomness
+            prev_motion = pts - variables["prev_pts"]
+            motion_scale = (
+                0.01 * variables['scene_radius']
+            )  # Slightly larger motion for dynamics
+            random_motion = torch.randn_like(pts) * motion_scale
+            # Combine previous motion with random motion (70% continuity, 30% randomness)
+            new_pts = pts + 0.7 * prev_motion + 0.3 * random_motion
 
-        # Minimal rotation change
-        rot_noise = torch.randn_like(rot) * 0.005  # Smaller rotation noise
-        new_rot = torch.nn.functional.normalize(rot + rot_noise)
+            # Similar approach for rotations
+            prev_rot = variables["prev_rot"]
+            rot_motion = rot - prev_rot
+            rot_noise = torch.randn_like(rot) * 0.01
+            new_rot = torch.nn.functional.normalize(
+                rot + 0.7 * rot_motion + 0.3 * rot_noise
+            )
+        else:
+            # First non-initial timestep, use minimal motion
+            motion_scale = 0.01 * variables['scene_radius']
+            random_motion = torch.randn_like(pts) * motion_scale
+            new_pts = pts + random_motion
+            rot_noise = torch.randn_like(rot) * 0.01
+            new_rot = torch.nn.functional.normalize(rot + rot_noise)
     else:
         new_pts = pts + (pts - variables["prev_pts"])
         new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
