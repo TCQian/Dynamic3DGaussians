@@ -163,8 +163,8 @@ def initialize_params_dnerf(seq, md, data_dir):
     print(f"Generating random point cloud ({num_points})...")
 
     # Create random points in a cube centered at scene_center
-    points = np.random.random((num_points, 3)) * 1.2 - 0.6
-    points = points * scene_radius * 0.4 + scene_center
+    points = np.random.random((num_points, 3)) * 2.6 - 1.3
+    points = points * scene_radius * 0.8 + scene_center
 
     # Initialize with gray colors
     colors = np.ones((num_points, 3)) * 0.5
