@@ -233,10 +233,14 @@ def initialize_per_timestep(params, variables, optimizer):
     pts = params['means3D']
     rot = torch.nn.functional.normalize(params['unnorm_rotations'])
     if variables.get('is_random_init', False):
-        new_pts = pts + (pts - variables["prev_pts"]) * 0.005
-        new_rot = torch.nn.functional.normalize(
-            rot + (rot - variables["prev_rot"]) * 0.005
-        )
+        # After stabilization, use minimal motion
+        motion_scale = 0.005 * variables['scene_radius']  # Even smaller motion
+        random_motion = torch.randn_like(pts) * motion_scale
+        new_pts = pts + random_motion
+
+        # Minimal rotation change
+        rot_noise = torch.randn_like(rot) * 0.005  # Smaller rotation noise
+        new_rot = torch.nn.functional.normalize(rot + rot_noise)
     else:
         new_pts = pts + (pts - variables["prev_pts"])
         new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
