@@ -402,6 +402,9 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         output_params.append(params2cpu(params, is_initial_timestep))
         if is_initial_timestep:
             variables = initialize_post_first_timestep(params, variables, optimizer)
+        elif variables.get('is_random_init', False):
+            variables = initialize_post_first_timestep(params, variables, optimizer)
+
     save_params(output_params, seq, exp, output_dir)
 
 
