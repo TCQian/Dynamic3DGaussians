@@ -394,15 +394,57 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
                     params, variables = densify(params, variables, optimizer, i)
                 elif variables.get('is_random_init', False):
                     # Lighter densification for subsequent timesteps
+                    prev_num_pts = params['means3D'].shape[0]
                     params, variables = densify_light(params, variables, optimizer, i)
+                    curr_num_pts = params['means3D'].shape[0]
+
+                    # If densification changed the number of points, update foreground-related variables
+                    if curr_num_pts != prev_num_pts:
+                        pts = params['means3D']
+                        rot = torch.nn.functional.normalize(params['unnorm_rotations'])
+                        is_fg = params['seg_colors'][:, 0] > 0.5
+
+                        # Update prev_inv_rot_fg for the new set of foreground points
+                        prev_inv_rot_fg = rot[is_fg]
+                        prev_inv_rot_fg[:, 1:] = -1 * prev_inv_rot_fg[:, 1:]
+                        variables['prev_inv_rot_fg'] = prev_inv_rot_fg.detach()
+
+                        # Recompute neighbor indices for the new foreground points
+                        fg_pts = pts[is_fg]
+                        if len(fg_pts) > 0:  # Only if there are foreground points
+                            num_knn = min(20, len(fg_pts) - 1) if len(fg_pts) > 1 else 1
+                            neighbor_sq_dist, neighbor_indices = o3d_knn(
+                                fg_pts.detach().cpu().numpy(), num_knn
+                            )
+                            neighbor_weight = np.exp(-2000 * neighbor_sq_dist)
+                            neighbor_dist = np.sqrt(neighbor_sq_dist)
+                            variables["neighbor_indices"] = (
+                                torch.tensor(neighbor_indices)
+                                .cuda()
+                                .long()
+                                .contiguous()
+                            )
+                            variables["neighbor_weight"] = (
+                                torch.tensor(neighbor_weight)
+                                .cuda()
+                                .float()
+                                .contiguous()
+                            )
+                            variables["neighbor_dist"] = (
+                                torch.tensor(neighbor_dist).cuda().float().contiguous()
+                            )
+
+                            # Update prev_offset with new neighbor indices
+                            prev_offset = (
+                                fg_pts[variables["neighbor_indices"]] - fg_pts[:, None]
+                            )
+                            variables['prev_offset'] = prev_offset.detach()
 
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
         progress_bar.close()
         output_params.append(params2cpu(params, is_initial_timestep))
         if is_initial_timestep:
-            variables = initialize_post_first_timestep(params, variables, optimizer)
-        elif variables.get('is_random_init', False):
             variables = initialize_post_first_timestep(params, variables, optimizer)
 
     save_params(output_params, seq, exp, output_dir)
