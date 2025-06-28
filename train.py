@@ -398,11 +398,16 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
                     params, variables = densify_light(params, variables, optimizer, i)
                     curr_num_pts = params['means3D'].shape[0]
 
-                    # If densification changed the number of points, update foreground-related variables
+                    # If densification changed the number of points, update ALL prev_ variables
                     if curr_num_pts != prev_num_pts:
                         pts = params['means3D']
                         rot = torch.nn.functional.normalize(params['unnorm_rotations'])
                         is_fg = params['seg_colors'][:, 0] > 0.5
+
+                        # Update ALL prev_ variables that depend on point count
+                        variables["prev_col"] = params['rgb_colors'].detach()
+                        variables["prev_pts"] = pts.detach()
+                        variables["prev_rot"] = rot.detach()
 
                         # Update prev_inv_rot_fg for the new set of foreground points
                         prev_inv_rot_fg = rot[is_fg]
