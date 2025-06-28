@@ -16,6 +16,7 @@ from external import (
     calc_psnr,
     calc_ssim,
     densify,
+    densify_light,
     update_params_and_optimizer,
 )
 from helpers import (
@@ -325,7 +326,10 @@ def report_progress(params, data, i, progress_bar, every_i=100):
             + params['cam_c'][curr_id][:, None, None]
         )
         psnr = calc_psnr(im, data['im']).mean()
-        progress_bar.set_postfix({"train img 0 PSNR": f"{psnr:.{7}f}"})
+        num_points = params['means3D'].shape[0]
+        progress_bar.set_postfix(
+            {"train img 0 PSNR": f"{psnr:.{7}f}", "num_points": f"{num_points}"}
+        )
         progress_bar.update(every_i)
 
 
@@ -384,8 +388,14 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
             loss.backward()
             with torch.no_grad():
                 report_progress(params, dataset[0], i, progress_bar)
+
+                # Enable densification for dynamic scenes beyond first timestep
                 if is_initial_timestep:
                     params, variables = densify(params, variables, optimizer, i)
+                elif variables.get('is_random_init', False):
+                    # Lighter densification for subsequent timesteps
+                    params, variables = densify_light(params, variables, optimizer, i)
+
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
         progress_bar.close()
