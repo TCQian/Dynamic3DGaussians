@@ -16,29 +16,28 @@ def load_hypernerf_data(data_dir, seq):
         raise FileNotFoundError(f"HyperNeRF dataset.json not found: {dataset_file}")
 
     print(f"Loading HyperNeRF dataset from: {dataset_file}")
-
     with open(dataset_file, 'r') as f:
         dataset = json.load(f)
 
     # Load metadata for temporal information
     metadata_file = os.path.join(data_dir, seq, "metadata.json")
     metadata = {}
-    if os.path.exists(metadata_file):
-        with open(metadata_file, 'r') as f:
-            metadata = json.load(f)
-        print(f"Loaded metadata with temporal information")
-    else:
-        print("No metadata.json found, using frame order as time")
+    if not os.path.exists(metadata_file):
+        raise FileNotFoundError(f"HyperNeRF metadata.json not found: {metadata_file}")
+
+    with open(metadata_file, 'r') as f:
+        metadata = json.load(f)
+    print(f"Loaded metadata with temporal information")
 
     # Load scene information
     scene_file = os.path.join(data_dir, seq, "scene.json")
     scene_info = {}
-    if os.path.exists(scene_file):
-        with open(scene_file, 'r') as f:
-            scene_info = json.load(f)
-        print(f"Loaded scene.json with scale={scene_info.get('scale', 1.0)}")
-    else:
-        print("No scene.json found, using default scene parameters")
+    if not os.path.exists(scene_file):
+        raise FileNotFoundError(f"HyperNeRF scene.json not found: {scene_file}")
+
+    with open(scene_file, 'r') as f:
+        scene_info = json.load(f)
+    print(f"Loaded scene.json with scale={scene_info.get('scale', 1.0)}")
 
     # Get frame IDs and train/test split
     all_ids = dataset.get('ids', [])
@@ -49,22 +48,16 @@ def load_hypernerf_data(data_dir, seq):
     print(f"Training frames: {len(train_ids)}")
     print(f"Validation frames: {len(val_ids)}")
 
-    # Look for camera.json file for camera parameters
-    camera_file = os.path.join(data_dir, seq, "camera.json")
-    if os.path.exists(camera_file):
-        with open(camera_file, 'r') as f:
-            camera_data = json.load(f)
-        print(f"Found camera.json with camera parameters")
-    else:
-        print(f"No camera.json found, will try to detect from first image")
-        camera_data = {}
+    # Look for camera folder with individual frame.json files
+    camera_folder = os.path.join(data_dir, seq, "camera")
+    if not os.path.exists(camera_folder):
+        raise FileNotFoundError(f"HyperNeRF camera folder not found: {camera_folder}")
 
     # Try to detect image dimensions and find the best resolution
     first_train_id = next(iter(train_ids)) if train_ids else all_ids[0]
 
-    # HyperNeRF stores images in different resolutions: 2x, 4x, 8x, 16x
-    # Try to find the best available resolution (prefer 2x for speed)
-    resolutions = ["2x", "4x", "8x", "16x"]
+    # HyperNeRF stores images in different resolutions: 2x, 4x, 8x, 16x, using 4x here
+    resolutions = ["4x"]  # ["2x", "4x", "8x", "16x"]
     img_path = None
     img_dir = None
 
@@ -100,9 +93,7 @@ def load_hypernerf_data(data_dir, seq):
 
         print(f"Original image size: {image_size}")
     else:
-        print(f"No camera file found for {first_train_id}, using defaults")
-        focal_length = w * 0.7
-        principal_point = [w / 2, h / 2]
+        raise FileNotFoundError(f"HyperNeRF camera file not found: {camera_file}")
 
     # Build intrinsic matrix
     k = [
@@ -117,32 +108,23 @@ def load_hypernerf_data(data_dir, seq):
 
     # Group frames by time_id from metadata for proper temporal ordering
     # This is crucial for HyperNeRF's temporal consistency
-    if metadata:
-        # Group training frames by time_id
-        frames_by_time = {}
-        for frame_id in train_ids:
-            if frame_id in metadata:
-                time_id = metadata[frame_id]['time_id']
-                if time_id not in frames_by_time:
-                    frames_by_time[time_id] = []
-                frames_by_time[time_id].append(frame_id)
-            else:
-                print(f"Warning: No metadata for frame {frame_id}")
+    frames_by_time = {}
+    for frame_id in train_ids:
+        if frame_id in metadata:
+            time_id = metadata[frame_id]['time_id']
+            if time_id not in frames_by_time:
+                frames_by_time[time_id] = []
+            frames_by_time[time_id].append(frame_id)
+        else:
+            print(f"Warning: No metadata for frame {frame_id}")
 
-        # Sort by time_id for proper temporal ordering
-        sorted_time_ids = sorted(frames_by_time.keys())
-        print(f"Found {len(sorted_time_ids)} unique time steps")
-        print(f"Time range: {min(sorted_time_ids)} - {max(sorted_time_ids)}")
+    # Sort by time_id for proper temporal ordering
+    sorted_time_ids = sorted(frames_by_time.keys())
+    print(f"Found {len(sorted_time_ids)} unique time steps")
+    print(f"Time range: {min(sorted_time_ids)} - {max(sorted_time_ids)}")
 
-        # Use temporal grouping
-        frame_groups = [
-            (time_id, frames_by_time[time_id]) for time_id in sorted_time_ids
-        ]
-    else:
-        # Fallback: treat each frame as its own timestep
-        sorted_train_ids = sorted([id for id in all_ids if id in train_ids])
-        frame_groups = [(i, [frame_id]) for i, frame_id in enumerate(sorted_train_ids)]
-        print(f"No temporal metadata, treating each frame as separate timestep")
+    # Use temporal grouping
+    frame_groups = [(time_id, frames_by_time[time_id]) for time_id in sorted_time_ids]
 
     # We treat each frame as a separate timestep
     fn = []
@@ -172,60 +154,47 @@ def load_hypernerf_data(data_dir, seq):
             file_path = f"{img_dir}/{frame_id}.png"
             full_path = os.path.join(data_dir, seq, file_path)
             if not os.path.exists(full_path):
-                # Try .jpg if .png doesn't exist
-                file_path = f"{img_dir}/{frame_id}.jpg"
-                full_path = os.path.join(data_dir, seq, file_path)
-                if not os.path.exists(full_path):
-                    print(f"Warning: Could not find image for frame {frame_id}")
-                    continue
+                raise FileNotFoundError(f"Image file not found: {full_path}")
 
             time_fn.append(file_path)
 
             # Load camera pose for this frame from individual camera file
             camera_file = os.path.join(data_dir, seq, "camera", f"{frame_id}.json")
-            if os.path.exists(camera_file):
-                with open(camera_file, 'r') as f:
-                    frame_camera = json.load(f)
+            with open(camera_file, 'r') as f:
+                frame_camera = json.load(f)
 
-                # Extract pose from HyperNeRF camera format
-                orientation = np.array(
-                    frame_camera['orientation']
-                )  # 3x3 rotation matrix
-                position = np.array(frame_camera['position'])  # 3D position
+            # Extract pose from HyperNeRF camera format
+            orientation = np.array(frame_camera['orientation'])  # 3x3 rotation matrix
+            position = np.array(frame_camera['position'])  # 3D position
 
-                # Apply scene scaling if available
-                if 'scale' in scene_info:
-                    position = position * scene_info['scale']
+            # Apply scene scaling if available
+            if 'scale' in scene_info:
+                position = position * scene_info['scale']
 
-                # Build camera-to-world matrix
-                c2w = np.eye(4)
-                c2w[:3, :3] = orientation
-                c2w[:3, 3] = position
+            # Build camera-to-world matrix
+            c2w = np.eye(4)
+            c2w[:3, :3] = orientation
+            c2w[:3, 3] = position
 
-                # Convert to world-to-camera
-                w2c = np.linalg.inv(c2w)
+            # Convert to world-to-camera
+            w2c = np.linalg.inv(c2w)
 
-                # Use frame-specific camera parameters
-                frame_focal = frame_camera.get('focal_length', focal_length)
-                frame_pp = frame_camera.get('principal_point', principal_point)
+            # Use frame-specific camera parameters
+            frame_focal = frame_camera.get('focal_length', focal_length)
+            frame_pp = frame_camera.get('principal_point', principal_point)
 
-                # Apply resolution scaling
-                frame_focal *= resolution_scale
-                frame_pp = [p * resolution_scale for p in frame_pp]
+            # Apply resolution scaling
+            frame_focal *= resolution_scale
+            frame_pp = [p * resolution_scale for p in frame_pp]
 
-                frame_k = [
-                    [frame_focal, 0, frame_pp[0]],
-                    [0, frame_focal, frame_pp[1]],
-                    [0, 0, 1],
-                ]
-                time_k.append(frame_k)
-            else:
-                print(f"Warning: No camera file for frame {frame_id}, using identity")
-                w2c = np.eye(4)
-                time_k.append(k)
+            frame_k = [
+                [frame_focal, 0, frame_pp[0]],
+                [0, frame_focal, frame_pp[1]],
+                [0, 0, 1],
+            ]
 
+            time_k.append(frame_k)
             time_w2c.append(w2c.tolist())
-
             fn.append(time_fn)
             w2c_list.append(time_w2c)
             k_list.append(time_k)
@@ -285,7 +254,7 @@ def get_dataset_hypernerf(t, md, seq, data_dir):
 
 
 def initialize_params_hypernerf(seq, md, data_dir):
-    """Initialize parameters for HyperNeRF - create point cloud from camera poses"""
+    """Initialize parameters for HyperNeRF - load point cloud from points.npy"""
     # Get scene information
     scene_info = md.get('scene_info', {})
     scene_scale = scene_info.get('scale', 1.0)
@@ -293,58 +262,65 @@ def initialize_params_hypernerf(seq, md, data_dir):
 
     print(f"Scene info: scale={scene_scale}, center={scene_center}")
 
-    # Since HyperNeRF might not have initial point cloud, create one from camera positions
+    # Load point cloud from points.npy
+    points_file = os.path.join(data_dir, seq, "points.npy")
+    if not os.path.exists(points_file):
+        raise FileNotFoundError(f"HyperNeRF points.npy not found: {points_file}")
+
+    print(f"Loading point cloud from: {points_file}")
+    points = np.load(points_file)
+
+    # HyperNeRF points.npy typically contains just XYZ coordinates
+    if points.shape[1] == 3:
+        # Initialize with gray colors and create foreground/background split
+        colors = np.ones((points.shape[0], 3)) * 0.5
+
+        # Create segmentation based on point distribution
+        # Points closer to scene center are more likely to be foreground
+        if np.any(scene_center != 0):
+            computed_center = scene_center
+        else:
+            computed_center = np.mean(points, axis=0)
+
+        distances_to_center = np.linalg.norm(points - computed_center, axis=1)
+
+        # Use a probability based on distance - closer points more likely to be foreground
+        scene_radius = np.max(distances_to_center)
+        fg_prob = np.exp(-distances_to_center / (scene_radius * 0.5))
+        seg = (np.random.random(points.shape[0]) < fg_prob).astype(float)
+
+        # Ensure at least 60% are foreground for better training
+        if seg.mean() < 0.6:
+            n_fg_needed = int(0.6 * points.shape[0]) - int(seg.sum())
+            bg_indices = np.where(seg == 0)[0]
+            if len(bg_indices) >= n_fg_needed:
+                seg[bg_indices[:n_fg_needed]] = 1.0
+
+        init_pt_cld = np.column_stack([points, colors, seg])
+        print(f"Loaded {points.shape[0]} points from file")
+    else:
+        # If points file has more columns, assume it's already formatted
+        init_pt_cld = points
+        seg = (
+            init_pt_cld[:, 6]
+            if init_pt_cld.shape[1] > 6
+            else np.ones(init_pt_cld.shape[0]) * 0.8
+        )
+        print(
+            f"Loaded {points.shape[0]} points with {points.shape[1]} columns from file"
+        )
+
+    # Get camera centers for scene radius calculation
     cam_centers = []
     for t in range(len(md['w2c'])):
         for c in range(len(md['w2c'][t])):
             w2c = np.array(md['w2c'][t][c])
             cam_center = np.linalg.inv(w2c)[:3, 3]
             cam_centers.append(cam_center)
-
     cam_centers = np.array(cam_centers)
 
-    # Use scene center if available, otherwise compute from camera positions
-    if np.any(scene_center != 0):
-        computed_center = scene_center
-    else:
-        computed_center = np.mean(cam_centers, axis=0)
-
-    scene_radius = np.max(np.linalg.norm(cam_centers - computed_center, axis=1))
-
-    print(
-        f"Camera positions range: {cam_centers.min(axis=0)} to {cam_centers.max(axis=0)}"
-    )
-    print(f"Computed scene center: {computed_center}")
-    print(f"Scene radius: {scene_radius}")
-
-    # Generate random points in a cube around the scene
-    num_points = 2000
-    print(f"Generating random point cloud ({num_points}) for HyperNeRF...")
-
-    # Create random points in a cube centered at computed_center
-    points = np.random.random((num_points, 3)) * 2.6 - 1.3
-    points = points * scene_radius * 0.8 + computed_center
-
-    # Initialize with gray colors
-    colors = np.ones((num_points, 3)) * 0.5
-
-    # Create a more realistic foreground/background split
-    # Points closer to scene center are more likely to be foreground
-    distances_to_center = np.linalg.norm(points - computed_center, axis=1)
-    # Use a probability based on distance - closer points more likely to be foreground
-    fg_prob = np.exp(-distances_to_center / (scene_radius * 0.5))
-    seg = (np.random.random(num_points) < fg_prob).astype(float)
-    # Ensure at least 60% are foreground for better training
-    if seg.mean() < 0.6:
-        n_fg_needed = int(0.6 * num_points) - int(seg.sum())
-        bg_indices = np.where(seg == 0)[0]
-        if len(bg_indices) >= n_fg_needed:
-            seg[bg_indices[:n_fg_needed]] = 1.0
-
-    init_pt_cld = np.column_stack([points, colors, seg])
     # Calculate max cameras per timestep (not total across all timesteps)
-    max_cams_per_timestep = max(len(md['fn'][t]) for t in range(len(md['fn'])))
-    max_cams = max(50, max_cams_per_timestep)
+    max_cams = max(len(md['fn'][t]) for t in range(len(md['fn'])))
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
     mean3_sq_dist = sq_dist.mean(-1).clip(min=0.0000001)
 
@@ -375,6 +351,6 @@ def initialize_params_hypernerf(seq, md, data_dir):
         .cuda()
         .float(),
         'denom': torch.zeros(params['means3D'].shape[0]).cuda().float(),
-        'is_hypernerf': True,  # Mark as using random initialization
+        'is_hypernerf': True,
     }
     return params, variables
