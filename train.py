@@ -16,7 +16,6 @@ from external import (
     calc_psnr,
     calc_ssim,
     densify,
-    densify_light,
     update_params_and_optimizer,
 )
 from helpers import (
@@ -194,33 +193,16 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
             params['rgb_colors'], variables["prev_col"]
         )
 
-    # Determine if we're using D-NeRF or HyperNeRF (indicated by random initialization)
-    is_random_init = variables.get('is_random_init', False)
-
-    if is_random_init:
-        # Much lighter regularization for D-NeRF/HyperNeRF with random initialization
-        loss_weights = {
-            'im': 1.0,
-            'seg': 3.0,
-            'rigid': 0.1,  # Much lighter - allow points to move freely
-            'rot': 0.05,  # Much lighter - allow rotations to change
-            'iso': 0.05,  # Much lighter - allow distances to change
-            'floor': 0.05,  # Much lighter - floor constraint barely enforced
-            'bg': 0.5,  # Much lighter - background can move more
-            'soft_col_cons': 0.01,
-        }
-    else:
-        # Original weights for CMU dataset
-        loss_weights = {
-            'im': 1.0,
-            'seg': 3.0,
-            'rigid': 4.0,
-            'rot': 4.0,
-            'iso': 2.0,
-            'floor': 2.0,
-            'bg': 20.0,
-            'soft_col_cons': 0.01,
-        }
+    loss_weights = {
+        'im': 1.0,
+        'seg': 3.0,
+        'rigid': 4.0,
+        'rot': 4.0,
+        'iso': 2.0,
+        'floor': 2.0,
+        'bg': 20.0,
+        'soft_col_cons': 0.01,
+    }
     loss = sum([loss_weights[k] * v for k, v in losses.items()])
     seen = radius > 0
     variables['max_2D_radius'][seen] = torch.max(
@@ -233,35 +215,8 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
 def initialize_per_timestep(params, variables, optimizer):
     pts = params['means3D']
     rot = torch.nn.functional.normalize(params['unnorm_rotations'])
-    if variables.get('is_random_init', False):
-        # For random initialization, use adaptive motion based on timestep
-        if 'prev_pts' in variables:
-            # Use previous motion for continuity, but with some randomness
-            prev_motion = pts - variables["prev_pts"]
-            motion_scale = (
-                0.01 * variables['scene_radius']
-            )  # Slightly larger motion for dynamics
-            random_motion = torch.randn_like(pts) * motion_scale
-            # Combine previous motion with random motion (70% continuity, 30% randomness)
-            new_pts = pts + 0.7 * prev_motion + 0.3 * random_motion
-
-            # Similar approach for rotations
-            prev_rot = variables["prev_rot"]
-            rot_motion = rot - prev_rot
-            rot_noise = torch.randn_like(rot) * 0.01
-            new_rot = torch.nn.functional.normalize(
-                rot + 0.7 * rot_motion + 0.3 * rot_noise
-            )
-        else:
-            # First non-initial timestep, use minimal motion
-            motion_scale = 0.01 * variables['scene_radius']
-            random_motion = torch.randn_like(pts) * motion_scale
-            new_pts = pts + random_motion
-            rot_noise = torch.randn_like(rot) * 0.01
-            new_rot = torch.nn.functional.normalize(rot + rot_noise)
-    else:
-        new_pts = pts + (pts - variables["prev_pts"])
-        new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
+    new_pts = pts + (pts - variables["prev_pts"])
+    new_rot = torch.nn.functional.normalize(rot + (rot - variables["prev_rot"]))
 
     is_fg = params['seg_colors'][:, 0] > 0.5
     prev_inv_rot_fg = rot[is_fg]
@@ -388,65 +343,12 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
             loss.backward()
             with torch.no_grad():
                 report_progress(params, dataset[0], i, progress_bar)
-
-                # Enable densification for dynamic scenes beyond first timestep
                 if is_initial_timestep:
                     params, variables = densify(params, variables, optimizer, i)
-                elif variables.get('is_random_init', False):
-                    # Lighter densification for subsequent timesteps
-                    prev_num_pts = params['means3D'].shape[0]
-                    params, variables = densify_light(params, variables, optimizer, i)
-                    curr_num_pts = params['means3D'].shape[0]
-
-                    # If densification changed the number of points, update ALL prev_ variables
-                    if curr_num_pts != prev_num_pts:
-                        pts = params['means3D']
-                        rot = torch.nn.functional.normalize(params['unnorm_rotations'])
-                        is_fg = params['seg_colors'][:, 0] > 0.5
-
-                        # Update ALL prev_ variables that depend on point count
-                        variables["prev_col"] = params['rgb_colors'].detach()
-                        variables["prev_pts"] = pts.detach()
-                        variables["prev_rot"] = rot.detach()
-
-                        # Update prev_inv_rot_fg for the new set of foreground points
-                        prev_inv_rot_fg = rot[is_fg]
-                        prev_inv_rot_fg[:, 1:] = -1 * prev_inv_rot_fg[:, 1:]
-                        variables['prev_inv_rot_fg'] = prev_inv_rot_fg.detach()
-
-                        # Recompute neighbor indices for the new foreground points
-                        fg_pts = pts[is_fg]
-                        if len(fg_pts) > 0:  # Only if there are foreground points
-                            num_knn = min(20, len(fg_pts) - 1) if len(fg_pts) > 1 else 1
-                            neighbor_sq_dist, neighbor_indices = o3d_knn(
-                                fg_pts.detach().cpu().numpy(), num_knn
-                            )
-                            neighbor_weight = np.exp(-2000 * neighbor_sq_dist)
-                            neighbor_dist = np.sqrt(neighbor_sq_dist)
-                            variables["neighbor_indices"] = (
-                                torch.tensor(neighbor_indices)
-                                .cuda()
-                                .long()
-                                .contiguous()
-                            )
-                            variables["neighbor_weight"] = (
-                                torch.tensor(neighbor_weight)
-                                .cuda()
-                                .float()
-                                .contiguous()
-                            )
-                            variables["neighbor_dist"] = (
-                                torch.tensor(neighbor_dist).cuda().float().contiguous()
-                            )
-
-                            # Update prev_offset with new neighbor indices
-                            prev_offset = (
-                                fg_pts[variables["neighbor_indices"]] - fg_pts[:, None]
-                            )
-                            variables['prev_offset'] = prev_offset.detach()
 
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+
         progress_bar.close()
         output_params.append(params2cpu(params, is_initial_timestep))
         if is_initial_timestep:

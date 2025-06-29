@@ -375,6 +375,6 @@ def initialize_params_hypernerf(seq, md, data_dir):
         .cuda()
         .float(),
         'denom': torch.zeros(params['means3D'].shape[0]).cuda().float(),
-        'is_random_init': True,  # Mark as using random initialization
+        'is_hypernerf': True,  # Mark as using random initialization
     }
     return params, variables

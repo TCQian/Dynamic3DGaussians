@@ -247,8 +247,7 @@ def initialize_params_dnerf(seq, md, data_dir):
     init_pt_cld = np.column_stack([points, colors, seg])
 
     # Calculate max cameras per timestep based on actual data
-    max_cams_per_timestep = max(len(md['fn'][t]) for t in range(len(md['fn'])))
-    max_cams = max(10, max_cams_per_timestep)  # At least 10 cameras
+    max_cams = max(len(md['fn'][t]) for t in range(len(md['fn'])))
     print(f"Max cameras per timestep: {max_cams}")
 
     sq_dist, _ = o3d_knn(init_pt_cld[:, :3], 3)
@@ -282,6 +281,6 @@ def initialize_params_dnerf(seq, md, data_dir):
         .cuda()
         .float(),
         'denom': torch.zeros(params['means3D'].shape[0]).cuda().float(),
-        'is_random_init': True,  # Mark as using random initialization
+        'is_dnerf': True,  # Mark as using random initialization
     }
     return params, variables
