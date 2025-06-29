@@ -167,7 +167,7 @@ def initialize_params_dnerf(seq, md, data_dir):
     print(f"Scene radius: {scene_radius}")
 
     # Generate more points for better coverage of dynamic scenes
-    num_points = 5000  # Increased from 3000
+    num_points = 100_000
     print(f"Generating random point cloud ({num_points})...")
 
     # Create better distributed points using multiple strategies
