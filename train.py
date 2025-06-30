@@ -354,6 +354,9 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         if is_initial_timestep:
             variables = initialize_post_first_timestep(params, variables, optimizer)
 
+        if t > 0 and t % 200 == 0:
+            save_params(output_params, seq, exp, output_dir)
+
     save_params(output_params, seq, exp, output_dir)
 
 
