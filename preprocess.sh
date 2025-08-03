@@ -16,4 +16,5 @@ python preprocess_dynerf_unified.py \
 --output-dir ./data/dynerf \
 --target-points 200000 \
 --width 640 \
---height 360
+--height 360 \
+--colmap-exe /home/e/e0407638/github/colmap/build/src/colmap/exe/colmap

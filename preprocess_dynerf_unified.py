@@ -254,7 +254,7 @@ class UnifiedDyNeRFPreprocessor:
         print(f"Using {len(first_frame_images)} TRAIN cameras for point cloud generation")
         
         # Step 1: Load COLMAP 3D points (generated from train cameras only)
-        points3d_path = os.path.join(self.sparse_dir, "points3D.txt")
+        points3d_path = os.path.join(self.sparse_dir, "points3D.bin")
         points, colors = self.load_colmap_points(points3d_path)
         
         if len(points) == 0:
@@ -291,27 +291,58 @@ class UnifiedDyNeRFPreprocessor:
         
         return init_pt_cld
 
-    def load_colmap_points(self, points3d_path):
-        """Load COLMAP 3D points"""
+    def load_colmap_points(self, points3d_bin_path):
+        """Load COLMAP 3D points from binary format (points3D.bin)"""
+        import struct
+        
+        if not os.path.exists(points3d_bin_path):
+            return np.array([]), np.array([])
+        
         points = []
         colors = []
         
-        if not os.path.exists(points3d_path):
+        try:
+            with open(points3d_bin_path, 'rb') as f:
+                # Read number of points
+                num_points = struct.unpack('Q', f.read(8))[0]
+                print(f"  Reading {num_points} points from COLMAP binary")
+                
+                for _ in range(num_points):
+                    # Read point ID (8 bytes)
+                    point_id = struct.unpack('Q', f.read(8))[0]
+                    
+                    # Read XYZ (3 * 8 bytes double precision)
+                    xyz = struct.unpack('ddd', f.read(24))
+                    
+                    # Read RGB (3 bytes)
+                    rgb = struct.unpack('BBB', f.read(3))
+                    rgb = np.array(rgb) / 255.0
+                    
+                    # Read error (8 bytes)
+                    error = struct.unpack('d', f.read(8))[0]
+                    
+                    # Read track data
+                    track_length = struct.unpack('Q', f.read(8))[0]
+                    # Skip track data (8 bytes per track element: image_id + point2D_idx)
+                    f.read(8 * track_length)
+                    
+                    points.append(xyz)
+                    colors.append(rgb)
+            
+            points = np.array(points)
+            colors = np.array(colors)
+            
+            if len(points) > 0:
+                print(f"  Successfully loaded {len(points)} COLMAP points")
+                print(f"  Point cloud bounds: X=[{points[:,0].min():.2f}, {points[:,0].max():.2f}]")
+                print(f"                     Y=[{points[:,1].min():.2f}, {points[:,1].max():.2f}]")
+                print(f"                     Z=[{points[:,2].min():.2f}, {points[:,2].max():.2f}]")
+            
+            return points, colors
+            
+        except Exception as e:
+            print(f"  Failed to read COLMAP binary: {e}")
             return np.array([]), np.array([])
-        
-        with open(points3d_path, 'r') as f:
-            for line in f:
-                if line.startswith('#') or not line.strip():
-                    continue
-                
-                parts = line.strip().split()
-                xyz = np.array([float(parts[1]), float(parts[2]), float(parts[3])])
-                rgb = np.array([int(parts[4]), int(parts[5]), int(parts[6])]) / 255.0
-                
-                points.append(xyz)
-                colors.append(rgb)
-        
-        return np.array(points), np.array(colors)
 
     def create_motion_based_3d_segmentation(self, points, colors, train_frames, first_frame_images, cameras):
         """
