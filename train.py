@@ -11,7 +11,6 @@ from diff_gaussian_rasterization import GaussianRasterizer as Renderer
 from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, weighted_l2_loss_v2, quat_mult, \
     o3d_knn, params2rendervar, params2cpu, save_params
 from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
-from preprocess_dynerf import preprocess_dynerf_sequence
 
 def get_dataset(t, md, seq, data_dir):
     dataset = []
@@ -191,7 +190,16 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         return
 
     if dataset_type == "dynerf":
-        preprocess_dynerf_sequence(data_dir, seq, os.path.join(data_dir, seq), target_size=(640, 360), max_frames=150)
+        try:
+            assert os.path.exists(f"{data_dir}/{seq}/train_meta.json"), "Train metadata not found"
+            assert os.path.exists(f"{data_dir}/{seq}/test_meta.json"), "Test metadata not found"
+            assert os.path.exists(f"{data_dir}/{seq}/ims"), "Images not found"
+            assert os.path.exists(f"{data_dir}/{seq}/seg"), "Segmentations not found"
+            assert os.path.exists(f"{data_dir}/{seq}/init_pt_cld.npz"), "Point cloud not found"
+        except AssertionError as e:
+            print(e)
+            print("Please run preprocess.sh to generate required input files for training")
+            return
 
     md = json.load(open(f"{data_dir}/{seq}/train_meta.json", 'r'))  # metadata
     num_timesteps = len(md['fn'])

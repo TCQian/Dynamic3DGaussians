@@ -10,4 +10,4 @@
 source ~/.bashrc
 conda activate 3dg
 
-python train.py
+python train.py --dataset-type dynerf --exp-name dynerf --data-dir ./data/dynerf --dataset cut_roasted_beef
