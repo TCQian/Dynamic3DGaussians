@@ -344,6 +344,115 @@ class UnifiedDyNeRFPreprocessor:
             print(f"  Failed to read COLMAP binary: {e}")
             return np.array([]), np.array([])
 
+    def load_colmap_cameras(self):
+        """Load COLMAP camera parameters from binary files"""
+        import struct
+        
+        cameras_path = os.path.join(self.sparse_dir, "cameras.bin")
+        images_path = os.path.join(self.sparse_dir, "images.bin")
+        
+        cameras = {}
+        
+        if not os.path.exists(cameras_path) or not os.path.exists(images_path):
+            print("  Warning: COLMAP camera files not found, using fallback")
+            return None
+        
+        try:
+            # Read cameras.bin (intrinsics)
+            with open(cameras_path, 'rb') as f:
+                num_cameras = struct.unpack('Q', f.read(8))[0]
+                
+                for _ in range(num_cameras):
+                    camera_id = struct.unpack('I', f.read(4))[0]
+                    model_id = struct.unpack('I', f.read(4))[0]
+                    width = struct.unpack('Q', f.read(8))[0]
+                    height = struct.unpack('Q', f.read(8))[0]
+                    
+                    # Read intrinsic parameters (for SIMPLE_PINHOLE: f, cx, cy)
+                    if model_id == 0:  # SIMPLE_PINHOLE
+                        params = struct.unpack('ddd', f.read(24))
+                        f, cx, cy = params
+                        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+                    else:
+                        # Handle other camera models if needed
+                        num_params = 3  # Assume 3 for now
+                        params = struct.unpack('d' * num_params, f.read(8 * num_params))
+                        f, cx, cy = params[:3]
+                        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+                    
+                    cameras[camera_id] = {'K': K, 'width': width, 'height': height}
+            
+            # Read images.bin (extrinsics)
+            with open(images_path, 'rb') as f:
+                num_images = struct.unpack('Q', f.read(8))[0]
+                
+                for _ in range(num_images):
+                    image_id = struct.unpack('I', f.read(4))[0]
+                    
+                    # Read quaternion (w, x, y, z) and translation
+                    quat = struct.unpack('dddd', f.read(32))
+                    trans = struct.unpack('ddd', f.read(24))
+                    
+                    camera_id = struct.unpack('I', f.read(4))[0]
+                    
+                    # Read image name
+                    name_bytes = b''
+                    while True:
+                        c = f.read(1)
+                        if c == b'\x00':
+                            break
+                        name_bytes += c
+                    image_name = name_bytes.decode('utf-8')
+                    
+                    # Skip 2D points data
+                    num_points2d = struct.unpack('Q', f.read(8))[0]
+                    f.read(24 * num_points2d)  # Skip point2D data
+                    
+                    # Convert quaternion to rotation matrix
+                    w, x, y, z = quat
+                    R = self.quat_to_rotation_matrix(w, x, y, z)
+                    t = np.array(trans)
+                    
+                    # Store extrinsics with camera
+                    if camera_id in cameras:
+                        cameras[camera_id]['images'] = cameras[camera_id].get('images', {})
+                        cameras[camera_id]['images'][image_name] = {'R': R, 't': t}
+            
+            print(f"  Loaded {len(cameras)} COLMAP cameras with extrinsics")
+            return cameras
+            
+        except Exception as e:
+            print(f"  Failed to load COLMAP cameras: {e}")
+            return None
+
+    def quat_to_rotation_matrix(self, w, x, y, z):
+        """Convert quaternion to rotation matrix"""
+        R = np.array([
+            [1 - 2*y*y - 2*z*z, 2*x*y - 2*z*w, 2*x*z + 2*y*w],
+            [2*x*y + 2*z*w, 1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w],
+            [2*x*z - 2*y*w, 2*y*z + 2*x*w, 1 - 2*x*x - 2*y*y]
+        ])
+        return R
+
+    def project_3d_to_2d(self, point_3d, K, R, t):
+        """Project 3D world point to 2D image pixel"""
+        # Transform to camera coordinates  
+        point_cam = R @ point_3d + t
+        
+        # Check if point is in front of camera
+        if point_cam[2] <= 0:
+            return None, None
+        
+        # Project to image plane
+        x = point_cam[0] / point_cam[2] 
+        y = point_cam[1] / point_cam[2]
+        
+        # Apply intrinsic matrix
+        u = K[0,0] * x + K[0,2]
+        v = K[1,1] * y + K[1,2]
+        
+        return int(u), int(v)
+
     def create_motion_based_3d_segmentation(self, points, colors, train_frames, first_frame_images, cameras):
         """
         Create 3D segmentation by projecting motion-based 2D segmentation back to 3D points
@@ -352,9 +461,23 @@ class UnifiedDyNeRFPreprocessor:
         print("  Creating motion-based 3D segmentation using TRAIN cameras only...")
         
         seg_3d = np.zeros(len(points))
-        
-        # For each 3D point, project to TRAIN cameras and check motion-based segmentation
         ims_dir = os.path.join(self.output_seq_dir, "ims")
+        
+        # Check if we have proper camera parameters
+        if cameras is None:
+            print("    No camera parameters available - using distance-based fallback only")
+            # Pure distance-based segmentation as fallback
+            scene_center = np.mean(points, axis=0)
+            for point_idx, point_3d in enumerate(points):
+                distance = np.linalg.norm(point_3d - scene_center)
+                distance_threshold = np.percentile([np.linalg.norm(p - scene_center) for p in points], 70)
+                seg_3d[point_idx] = 1.0 if distance <= distance_threshold else 0.0
+            return seg_3d
+        
+        # Use larger frame gap for better motion detection
+        frame_gap = min(10, max(1, len(list(train_frames.values())[0]) // 15))
+        print(f"    Using frame gap: {frame_gap} for motion detection")
+        print(f"    Using proper 3D→2D projection with COLMAP cameras")
         
         for point_idx, point_3d in enumerate(tqdm(points, desc="Projecting 3D points")):
             fg_votes = 0
@@ -362,43 +485,70 @@ class UnifiedDyNeRFPreprocessor:
             
             # Project to each TRAIN camera and check motion
             for cam_id in sorted(train_frames.keys())[:10]:  # Use first 10 train cameras for efficiency
-                if len(train_frames[cam_id]) < 2:
+                if len(train_frames[cam_id]) <= frame_gap:
                     continue
                 
-                # Get camera parameters (simplified - you'd get this from COLMAP)
-                # For now, use a basic projection assuming we have the poses
+                # Get camera parameters from COLMAP
+                cam_id_str = f"cam_{cam_id:02d}.jpg"
+                camera_data = None
+                for camera_id, cam_info in cameras.items():
+                    if 'images' in cam_info and cam_id_str in cam_info['images']:
+                        camera_data = cam_info
+                        image_data = cam_info['images'][cam_id_str]
+                        break
                 
-                # Load first few frames to detect motion
+                if camera_data is None:
+                    continue
+                
+                K = camera_data['K']
+                R = image_data['R'] 
+                t = image_data['t']
+                
+                # Project 3D point to 2D pixel
+                u, v = self.project_3d_to_2d(point_3d, K, R, t)
+                if u is None or v is None:
+                    continue  # Point behind camera
+                
+                # Load frames with larger interval for motion detection
                 frame_0_path = os.path.join(ims_dir, str(cam_id), train_frames[cam_id][0])
-                if len(train_frames[cam_id]) > 1:
-                    frame_1_path = os.path.join(ims_dir, str(cam_id), train_frames[cam_id][1])
-                else:
+                frame_t_path = os.path.join(ims_dir, str(cam_id), train_frames[cam_id][frame_gap])
+                
+                try:
+                    frame_0 = np.array(Image.open(frame_0_path)).astype(np.float32)
+                    frame_t = np.array(Image.open(frame_t_path)).astype(np.float32)
+                except:
                     continue
                 
-                frame_0 = np.array(Image.open(frame_0_path)).astype(np.float32)
-                frame_1 = np.array(Image.open(frame_1_path)).astype(np.float32)
-                
-                # Simple motion detection at projected point
-                # This is a simplified version - you'd use proper camera projection
                 h, w = frame_0.shape[:2]
-                u, v = int(w * 0.5), int(h * 0.5)  # Simplified projection
                 
-                if 0 <= u < w and 0 <= v < h:
-                    # Check motion at this pixel
-                    motion = np.abs(frame_1[v, u] - frame_0[v, u]).mean()
-                    if motion > 30:  # Motion threshold
-                        fg_votes += 1
-                    total_votes += 1
+                # Check if projected point is within image bounds
+                if 10 <= u < w-10 and 10 <= v < h-10:
+                    # Use patch-based motion around the projected point
+                    patch_size = 5
+                    y1, y2 = v - patch_size, v + patch_size
+                    x1, x2 = u - patch_size, u + patch_size
+                    
+                    patch_0 = frame_0[y1:y2, x1:x2]
+                    patch_t = frame_t[y1:y2, x1:x2]
+                    
+                    if patch_0.size > 0 and patch_t.size > 0:
+                        # Calculate patch motion (RMS difference)
+                        motion = np.sqrt(np.mean((patch_t - patch_0) ** 2))
+                        # Lowered threshold for more sensitive motion detection
+                        if motion > 8.0:
+                            fg_votes += 1
+                        total_votes += 1
             
             # Assign segmentation based on votes
             if total_votes > 0:
                 fg_ratio = fg_votes / total_votes
-                seg_3d[point_idx] = 1.0 if fg_ratio > 0.3 else 0.0
+                # More permissive voting threshold
+                seg_3d[point_idx] = 1.0 if fg_ratio > 0.2 else 0.0
             else:
-                # Fallback: distance-based
+                # Fallback: distance-based (more conservative)
                 scene_center = np.mean(points, axis=0)
                 distance = np.linalg.norm(point_3d - scene_center)
-                distance_threshold = np.percentile([np.linalg.norm(p - scene_center) for p in points], 60)
+                distance_threshold = np.percentile([np.linalg.norm(p - scene_center) for p in points], 70)
                 seg_3d[point_idx] = 1.0 if distance <= distance_threshold else 0.0
         
         return seg_3d
@@ -671,7 +821,7 @@ class UnifiedDyNeRFPreprocessor:
         colmap_success = self.run_colmap_on_first_frame(poses, h, w, f, target_size)
         
         # Create unified segmentation (using train cameras for point cloud)
-        cameras = None  # You'd load camera matrices from COLMAP
+        cameras = self.load_colmap_cameras()  # Load actual camera parameters
         self.create_unified_segmentation(all_frames, train_frames, first_frame_images, cameras, target_points)
         
         # Create metadata (separate train and test) with TARGET dimensions
