@@ -11,7 +11,7 @@ from diff_gaussian_rasterization import GaussianRasterizer as Renderer
 from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, weighted_l2_loss_v2, quat_mult, \
     o3d_knn, params2rendervar, params2cpu, save_params
 from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
-
+from preprocess_dynerf import preprocess_dynerf_sequence
 
 def get_dataset(t, md, seq, data_dir):
     dataset = []
@@ -185,10 +185,14 @@ def report_progress(params, data, i, progress_bar, every_i=100):
         progress_bar.update(every_i)
 
 
-def train(seq, exp, data_dir, output_dir):
+def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     if os.path.exists(f"{output_dir}/{exp}/{seq}"):
         print(f"Experiment '{exp}' for sequence '{seq}' already exists. Exiting.")
         return
+
+    if dataset_type == "dynerf":
+        preprocess_dynerf_sequence(data_dir, seq, os.path.join(data_dir, seq), target_size=(640, 360), max_frames=150)
+
     md = json.load(open(f"{data_dir}/{seq}/train_meta.json", 'r'))  # metadata
     num_timesteps = len(md['fn'])
     params, variables = initialize_params(seq, md, data_dir)
@@ -216,6 +220,10 @@ def train(seq, exp, data_dir, output_dir):
         output_params.append(params2cpu(params, is_initial_timestep))
         if is_initial_timestep:
             variables = initialize_post_first_timestep(params, variables, optimizer)
+
+        if t > 0 and t % 200 == 0:
+            save_params(output_params, seq, exp, output_dir)
+
     save_params(output_params, seq, exp, output_dir)
 
 
@@ -235,8 +243,14 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="basketball",
-        choices=["basketball", "boxes", "football", "juggle", "softball", "tennis"],
         help="Name of the dataset to use for training (e.g., basketball, boxes, etc.)",
     )
+    parser.add_argument(
+        "--dataset-type",
+        type=str,
+        default="cmu",
+        choices=["cmu", "dynerf"],
+        help="Type of dataset format: 'cmu' for the current format, 'dynerf' for DyNeRF format",
+    )
     args = parser.parse_args()
-    train(args.dataset, args.exp_name, args.data_dir, args.output_dir)
+    train(args.dataset, args.exp_name, args.data_dir, args.output_dir, args.dataset_type)
