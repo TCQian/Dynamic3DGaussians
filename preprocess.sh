@@ -8,8 +8,6 @@
 #SBATCH --mem=16G                        # Request 16GB of memory
 
 source ~/.bashrc
-conda activate 3dg
-
 conda activate colmap
 
 python preprocess_dynerf_unified.py \

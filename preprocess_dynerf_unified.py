@@ -152,59 +152,97 @@ class UnifiedDyNeRFPreprocessor:
         print(f"\nCOLMAP will use {len(first_frame_images)} TRAIN cameras' first frames")
         return all_frames, train_frames, test_frames, first_frame_images
 
-    def run_colmap_on_first_frame(self, poses, h, w, f):
-        """Run COLMAP SfM on first frame (Ex4DGS approach)"""
+    def run_colmap_on_first_frame(self, poses, h_orig, w_orig, f_orig, target_size=(640, 360)):
+        """Run COLMAP SfM on first frame with proper camera parameter scaling"""
         print("Running COLMAP SfM on first frame...")
+        
+        w_target, h_target = target_size
+        
+        # Scale focal length and principal point for resized images
+        scale_x = w_target / w_orig
+        scale_y = h_target / h_orig
+        f_scaled = f_orig * scale_x  # Assume uniform scaling
+        cx_scaled = w_target / 2
+        cy_scaled = h_target / 2
+        
+        print(f"  Original: {w_orig}x{h_orig}, f={f_orig:.1f}")
+        print(f"  Target: {w_target}x{h_target}, f_scaled={f_scaled:.1f}")
         
         # Create database
         if os.path.exists(self.database_path):
             os.remove(self.database_path)
         
         cmd = [self.colmap_exe, "database_creator", "--database_path", self.database_path]
-        subprocess.run(cmd, check=True, capture_output=True)
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Database creation failed: {result.stderr}")
+            return False
         
-        # Feature extraction
+        # Feature extraction with better parameters for resized images
         cmd = [
             self.colmap_exe, "feature_extractor",
             "--database_path", self.database_path,
             "--image_path", self.images_dir,
             "--ImageReader.single_camera", "1",
             "--ImageReader.camera_model", "SIMPLE_PINHOLE",
-            "--ImageReader.camera_params", f"{f},{w/2},{h/2}",
-            "--SiftExtraction.max_image_size", "1600",
-            "--SiftExtraction.max_num_features", "8192"
+            "--ImageReader.camera_params", f"{f_scaled},{cx_scaled},{cy_scaled}",
+            "--SiftExtraction.max_image_size", "2000",
+            "--SiftExtraction.max_num_features", "16384",
+            "--SiftExtraction.first_octave", "-1",
+            "--SiftExtraction.octave_resolution", "3"
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Feature extraction failed: {result.stderr}")
+            print("STDOUT:", result.stdout)
             return False
+        else:
+            print(f"  Feature extraction successful")
         
-        # Feature matching
+        # Feature matching with relaxed parameters
         cmd = [
             self.colmap_exe, "exhaustive_matcher",
-            "--database_path", self.database_path
+            "--database_path", self.database_path,
+            "--SiftMatching.guided_matching", "1",
+            "--SiftMatching.max_ratio", "0.8",
+            "--SiftMatching.max_distance", "0.7",
+            "--SiftMatching.cross_check", "1",
+            "--SiftMatching.max_num_matches", "32768"
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Feature matching failed: {result.stderr}")
+            print("STDOUT:", result.stdout)
             return False
+        else:
+            print(f"  Feature matching successful")
         
-        # Structure-from-Motion
+        # Structure-from-Motion with relaxed parameters
         os.makedirs(self.sparse_dir, exist_ok=True)
         cmd = [
             self.colmap_exe, "mapper",
             "--database_path", self.database_path,
             "--image_path", self.images_dir,
             "--output_path", os.path.dirname(self.sparse_dir),
-            "--Mapper.min_num_matches", "15",
-            "--Mapper.init_min_num_inliers", "100"
+            "--Mapper.min_num_matches", "10",
+            "--Mapper.init_min_num_inliers", "50",
+            "--Mapper.abs_pose_min_num_inliers", "20",
+            "--Mapper.abs_pose_min_inlier_ratio", "0.15",
+            "--Mapper.ba_local_max_num_iterations", "25",
+            "--Mapper.ba_global_max_num_iterations", "50",
+            "--Mapper.min_focal_length_ratio", "0.1",
+            "--Mapper.max_focal_length_ratio", "10.0",
+            "--Mapper.max_extra_param", "1.0"
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"SfM failed: {result.stderr}")
+            print("STDOUT:", result.stdout)
             return False
         
-        return os.path.exists(os.path.join(self.sparse_dir, "points3D.txt"))
+        points3d_exists = os.path.exists(os.path.join(self.sparse_dir, "points3D.txt"))
+        
+        return points3d_exists
 
     def create_unified_segmentation(self, all_frames, train_frames, first_frame_images, cameras, target_points=200000):
         """
@@ -477,14 +515,25 @@ class UnifiedDyNeRFPreprocessor:
                 mask_path = os.path.join(cam_seg_dir, mask_filename)
                 Image.fromarray(mask).save(mask_path)
 
-    def create_metadata(self, poses, train_frames, test_frames, h, w, f):
-        """Create metadata in CMU format with proper train/test split"""
+    def create_metadata(self, poses, train_frames, test_frames, target_size, f_orig):
+        """Create metadata in CMU format with proper train/test split using TARGET dimensions"""
         print("Creating train and test metadata...")
         
-        # Create train metadata
+        w_target, h_target = target_size
+        
+        # Scale focal length to match resized images  
+        hwf = poses[0, :, 4]  # HWF from poses
+        w_orig = int(hwf[1])  # Original width from HWF
+        scale_x = w_target / w_orig
+        f_scaled = f_orig * scale_x
+        
+        print(f"  Metadata dimensions: {w_target}x{h_target} (target)")
+        print(f"  Focal length: {f_orig:.1f} -> {f_scaled:.1f} (scaled)")
+        
+        # Create train metadata with TARGET dimensions
         train_metadata = {
-            'w': w,
-            'h': h,
+            'w': w_target,
+            'h': h_target,
             'fn': [],
             'k': [],
             'w2c': []
@@ -504,8 +553,8 @@ class UnifiedDyNeRFPreprocessor:
                     # CMU format: relative path "cam_id/timestamp.jpg"
                     frame_filenames.append(f"{cam_id}/{train_frames[cam_id][t]}")
                     
-                    # Simple intrinsics
-                    K = [[f, 0, w/2], [0, f, h/2], [0, 0, 1]]
+                    # Scaled intrinsics for resized images
+                    K = [[f_scaled, 0, w_target/2], [0, f_scaled, h_target/2], [0, 0, 1]]
                     frame_intrinsics.append(K)
                     
                     # Simple w2c (you'd use actual COLMAP results)
@@ -519,15 +568,15 @@ class UnifiedDyNeRFPreprocessor:
         
         # Save train metadata
         train_metadata_path = os.path.join(self.output_seq_dir, "train_meta.json")
-        with open(train_metadata_path, 'w') as f:
-            json.dump(train_metadata, f, indent=2)
+        with open(train_metadata_path, 'w') as file_handle:
+            json.dump(train_metadata, file_handle, indent=2)
         
         print(f"Created train metadata: {len(train_metadata['fn'])} timesteps, {len(sorted(train_frames.keys()))} cameras")
         
-        # Create test metadata
+        # Create test metadata with TARGET dimensions
         test_metadata = {
-            'w': w,
-            'h': h,
+            'w': w_target,
+            'h': h_target,
             'fn': [],
             'k': [],
             'w2c': []
@@ -547,8 +596,8 @@ class UnifiedDyNeRFPreprocessor:
                     # CMU format: relative path "cam_id/timestamp.jpg"
                     frame_filenames.append(f"{cam_id}/{test_frames[cam_id][t]}")
                     
-                    # Simple intrinsics
-                    K = [[f, 0, w/2], [0, f, h/2], [0, 0, 1]]
+                    # Scaled intrinsics for resized images
+                    K = [[f_scaled, 0, w_target/2], [0, f_scaled, h_target/2], [0, 0, 1]]
                     frame_intrinsics.append(K)
                     
                     # Simple w2c (you'd use actual COLMAP results)
@@ -562,8 +611,8 @@ class UnifiedDyNeRFPreprocessor:
         
         # Save test metadata
         test_metadata_path = os.path.join(self.output_seq_dir, "test_meta.json")
-        with open(test_metadata_path, 'w') as f:
-            json.dump(test_metadata, f, indent=2)
+        with open(test_metadata_path, 'w') as file_handle:
+            json.dump(test_metadata, file_handle, indent=2)
         
         print(f"Created test metadata: {len(test_metadata['fn'])} timesteps, {len(sorted(test_frames.keys()))} cameras")
 
@@ -588,14 +637,14 @@ class UnifiedDyNeRFPreprocessor:
         all_frames, train_frames, test_frames, first_frame_images = self.extract_all_frames(target_size, max_frames)
         
         # Run COLMAP on first frame (ONLY train cameras)
-        colmap_success = self.run_colmap_on_first_frame(poses, h, w, f)
+        colmap_success = self.run_colmap_on_first_frame(poses, h, w, f, target_size)
         
         # Create unified segmentation (using train cameras for point cloud)
         cameras = None  # You'd load camera matrices from COLMAP
         self.create_unified_segmentation(all_frames, train_frames, first_frame_images, cameras, target_points)
         
-        # Create metadata (separate train and test)
-        self.create_metadata(poses, train_frames, test_frames, h, w, f)
+        # Create metadata (separate train and test) with TARGET dimensions
+        self.create_metadata(poses, train_frames, test_frames, target_size, f)
         
         print("Unified preprocessing completed!")
         print(f"Output: {self.output_seq_dir}")
