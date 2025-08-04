@@ -2,20 +2,26 @@
 """
 Unified DyNeRF Preprocessing for Dynamic3DGaussians
 
+Enhanced version with:
+1. Multi-frame COLMAP: Uses n=10 frames per training camera (configurable)
+2. Uses COLMAP point cloud as-is: No artificial point generation or sampling
+3. Proper train/test split with separate metadata files
+4. CMU-format output structure
+5. Motion-based 3D segmentation with 3D→2D projection
+
 Features:
 - COLMAP-based 3D reconstruction from multiple frames per camera
 - Motion-based segmentation using proper camera projection
-- Random point densification to avoid KDTree errors
+- Uses natural COLMAP point count (typically 1000-5000 points)
 - Consistent 2D/3D segmentation
 - Train/test camera splitting (test cameras: [1, 10, 15, 19])
 - CMU format: ims/cam_id/timestamp.jpg, seg/cam_id/timestamp.png
 
 Usage:
-    python preprocess_dynerf_unified.py --seq cut_roasted_beef --colmap-frames 10 --target-points 200000
+    python preprocess_dynerf_unified.py --seq cut_roasted_beef --colmap-frames 10
 
 Arguments:
     --colmap-frames: Number of frames per training camera for COLMAP (default: 10)
-    --target-points: Total point cloud size (default: 2000)
     --width/height: Target image dimensions (default: 640x360)
 """
 
@@ -27,7 +33,7 @@ import subprocess
 from PIL import Image
 from tqdm import tqdm
 import argparse
-
+import shutil
 
 class UnifiedDyNeRFPreprocessor:
     """Unified preprocessing ensuring consistent 3D and 2D segmentation"""
@@ -48,6 +54,8 @@ class UnifiedDyNeRFPreprocessor:
         self.database_path = os.path.join(self.colmap_workspace, "database.db")
         self.sparse_dir = os.path.join(self.colmap_workspace, "sparse", "0")
         
+        if os.path.exists(self.colmap_workspace):
+            shutil.rmtree(self.colmap_workspace)
         os.makedirs(self.output_seq_dir, exist_ok=True)
         os.makedirs(self.colmap_workspace, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
@@ -255,7 +263,7 @@ class UnifiedDyNeRFPreprocessor:
         
         return points3d_exists
 
-    def create_unified_segmentation(self, all_frames, train_frames, first_frame_images, cameras, target_points=200000):
+    def create_unified_segmentation(self, all_frames, train_frames, first_frame_images, cameras):
         """
         Create unified segmentation strategy:
         1. Generate 3D segmentation from COLMAP + motion analysis (using ONLY train cameras)
@@ -270,32 +278,20 @@ class UnifiedDyNeRFPreprocessor:
         
         if len(points) == 0:
             print("No COLMAP points found, using fallback method")
-            # Pass target_size from run_unified_preprocessing
-            return self.create_fallback_segmentation(all_frames, target_points, getattr(self, '_target_size', (640, 360)))
+            return self.create_fallback_segmentation(all_frames, getattr(self, '_target_size', (640, 360)))
         
         # Step 2: Create motion-based 3D segmentation (using train cameras)
         seg_3d = self.create_motion_based_3d_segmentation(points, colors, train_frames, first_frame_images, cameras)
         
-        # Step 3: Densify point cloud to target count
-        if len(points) < target_points:
-            points, colors, seg_3d = self.densify_point_cloud_with_segmentation(
-                points, colors, seg_3d, target_points
-            )
-        elif len(points) > target_points:
-            indices = np.random.choice(len(points), target_points, replace=False)
-            points = points[indices]
-            colors = colors[indices] 
-            seg_3d = seg_3d[indices]
-        
-        # Step 4: Create consistent 2D segmentation for all frames (train and test)
+        # Step 3: Create consistent 2D segmentation for all frames (train and test)
         self.create_consistent_2d_segmentation(points, seg_3d, all_frames, cameras)
         
-        # Step 5: Save 3D point cloud
+        # Step 4: Save 3D point cloud (use COLMAP points as-is)
         init_pt_cld = np.column_stack([points, colors, seg_3d])
         output_path = os.path.join(self.output_seq_dir, "init_pt_cld.npz")
         np.savez(output_path, data=init_pt_cld)
         
-        print(f"Created unified segmentation:")
+        print(f"Created segmentation using COLMAP points:")
         print(f"  - Total points: {len(points):,}")
         print(f"  - Foreground: {np.sum(seg_3d):,} points ({np.mean(seg_3d)*100:.1f}%)")
         print(f"  - Background: {np.sum(1-seg_3d):,} points ({np.mean(1-seg_3d)*100:.1f}%)")
@@ -564,59 +560,6 @@ class UnifiedDyNeRFPreprocessor:
         
         return seg_3d
 
-    def densify_point_cloud_with_segmentation(self, points, colors, seg_3d, target_count):
-        """Generate random points in scene bounds while preserving segmentation ratio"""
-        current_count = len(points)
-        needed_points = target_count - current_count
-        
-        if needed_points <= 0:
-            return points, colors, seg_3d
-        
-        print(f"  Adding {needed_points:,} random points to reach target of {target_count:,}")
-        
-        # Calculate scene bounds from existing points
-        if len(points) > 0:
-            min_bounds = np.min(points, axis=0)
-            max_bounds = np.max(points, axis=0)
-            # Expand bounds slightly
-            range_bounds = max_bounds - min_bounds
-            min_bounds -= range_bounds * 0.1
-            max_bounds += range_bounds * 0.1
-        else:
-            # Default bounds if no points exist
-            min_bounds = np.array([-10.0, -10.0, -10.0])
-            max_bounds = np.array([10.0, 10.0, 10.0])
-        
-        # Calculate foreground ratio from existing points
-        if len(seg_3d) > 0:
-            fg_ratio = np.mean(seg_3d)
-        else:
-            fg_ratio = 0.2  # Default 20% foreground
-        
-        print(f"  Scene bounds: X=[{min_bounds[0]:.2f}, {max_bounds[0]:.2f}], "
-              f"Y=[{min_bounds[1]:.2f}, {max_bounds[1]:.2f}], "
-              f"Z=[{min_bounds[2]:.2f}, {max_bounds[2]:.2f}]")
-        print(f"  Target foreground ratio: {fg_ratio:.1%}")
-        
-        # Generate random points within bounds
-        new_points = np.random.uniform(min_bounds, max_bounds, (needed_points, 3))
-        
-        # Generate random colors (RGB)
-        new_colors = np.random.uniform(0.0, 1.0, (needed_points, 3))
-        
-        # Generate segmentation based on target ratio
-        new_seg = np.random.binomial(1, fg_ratio, needed_points).astype(np.float32)
-        
-        # Combine with existing points
-        all_points = np.vstack([points, new_points])
-        all_colors = np.vstack([colors, new_colors])
-        all_seg = np.concatenate([seg_3d, new_seg])
-        
-        print(f"  Final point cloud: {len(all_points):,} points "
-              f"({np.mean(all_seg)*100:.1f}% foreground)")
-        
-        return all_points, all_colors, all_seg
-
     def create_consistent_2d_segmentation(self, points_3d, seg_3d, all_frames, cameras):
         """
         Create 2D segmentation masks that are consistent with 3D segmentation
@@ -663,14 +606,17 @@ class UnifiedDyNeRFPreprocessor:
                 mask_path = os.path.join(cam_seg_dir, mask_filename)
                 Image.fromarray((motion_mask * 255).astype(np.uint8)).save(mask_path)
 
-    def create_fallback_segmentation(self, all_frames, target_points, target_size=(640, 360)):
+    def create_fallback_segmentation(self, all_frames, target_size=(640, 360)):
         """Fallback segmentation when COLMAP fails"""
         print("Using fallback segmentation (no COLMAP points)")
         
-        # Create simple point cloud
-        points = np.random.normal(0, 1, (target_points, 3))
-        colors = np.random.rand(target_points, 3)
+        # Create simple point cloud with fixed small number of points
+        fallback_points = 1000  # Small fallback since COLMAP failed
+        points = np.random.normal(0, 1, (fallback_points, 3))
+        colors = np.random.rand(fallback_points, 3)
         seg_3d = (np.linalg.norm(points, axis=1) < 1.0).astype(np.float32)
+        
+        print(f"Created fallback point cloud: {fallback_points} points")
         
         # Create simple 2D segmentation
         self.create_simple_2d_segmentation(all_frames, target_size)
@@ -803,7 +749,7 @@ class UnifiedDyNeRFPreprocessor:
         
         print(f"Created test metadata: {len(test_metadata['fn'])} timesteps, {len(sorted(test_frames.keys()))} cameras")
 
-    def run_unified_preprocessing(self, target_size=(640, 360), max_frames=150, target_points=200000, colmap_frames_per_cam=10):
+    def run_unified_preprocessing(self, target_size=(640, 360), max_frames=150, colmap_frames_per_cam=10):
         """Run complete unified preprocessing with proper train/test split"""
         print("Starting unified DyNeRF preprocessing with train/test split...")
         
@@ -828,7 +774,7 @@ class UnifiedDyNeRFPreprocessor:
         
         # Create unified segmentation (using train cameras for point cloud)
         cameras = self.load_colmap_cameras()  # Load actual camera parameters
-        self.create_unified_segmentation(all_frames, train_frames, first_frame_images, cameras, target_points)
+        self.create_unified_segmentation(all_frames, train_frames, first_frame_images, cameras)
         
         # Create metadata (separate train and test) with TARGET dimensions
         self.create_metadata(poses, train_frames, test_frames, target_size, f)
@@ -847,7 +793,6 @@ def main():
     parser.add_argument("--seq", type=str, default="cut_roasted_beef")
     parser.add_argument("--output-dir", type=str, default="./processed_unified")
     parser.add_argument("--max-frames", type=int, default=150)
-    parser.add_argument("--target-points", type=int, default=2000)
     parser.add_argument("--width", type=int, default=640, help="Target image width")
     parser.add_argument("--height", type=int, default=360, help="Target image height")
     parser.add_argument("--colmap-frames", type=int, default=10, help="Number of frames per camera for COLMAP")
@@ -862,7 +807,6 @@ def main():
     success = preprocessor.run_unified_preprocessing(
         target_size=(args.width, args.height),
         max_frames=args.max_frames,
-        target_points=args.target_points,
         colmap_frames_per_cam=args.colmap_frames
     )
     
