@@ -139,7 +139,6 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="basketball",
-        choices=["basketball", "boxes", "football", "juggle", "softball", "tennis"],
         help="Name of the dataset to use for training (e.g., basketball, boxes, etc.)",
     )
     args = parser.parse_args()

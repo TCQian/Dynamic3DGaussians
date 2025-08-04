@@ -14,7 +14,7 @@ python preprocess_dynerf_unified.py \
 --data-dir ./data/dynerf \
 --seq cut_roasted_beef \
 --output-dir ./data/dynerf \
---target-points 200000 \
 --width 640 \
 --height 360 \
---colmap-exe /home/e/e0407638/github/colmap/build/src/colmap/exe/colmap
+--colmap-exe /home/e/e0407638/github/colmap/build/src/colmap/exe/colmap \
+--colmap-frames 10
