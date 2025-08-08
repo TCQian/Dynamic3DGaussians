@@ -452,7 +452,7 @@ class UnifiedDyNeRFPreprocessor:
         # Fallback to sparse point cloud
         if len(points_colmap) == 0:
             print("  No dense point cloud found, using sparse point cloud...")
-        points3d_path = os.path.join(self.sparse_dir, "points3D.bin")
+            points3d_path = os.path.join(self.sparse_dir, "points3D.bin")
             points_colmap, colors = self.load_colmap_points(points3d_path)
             if len(points_colmap) > 0:
                 print(f"  Using COLMAP sparse point cloud: {len(points_colmap):,} points")
@@ -891,7 +891,7 @@ class UnifiedDyNeRFPreprocessor:
                 # Save mask in CMU format: seg/cam_id/timestamp.png
                 mask_filename = frame_filename.replace('.jpg', '.png')
                 mask_path = os.path.join(cam_seg_dir, mask_filename)
-                    Image.fromarray(foreground_mask).save(mask_path)
+                Image.fromarray(foreground_mask).save(mask_path)
 
 
     def create_fallback_segmentation(self, all_frames):
@@ -994,9 +994,9 @@ class UnifiedDyNeRFPreprocessor:
         }
         
             for timestep_data in camera_data_list:
-            frame_filenames = []
-            frame_intrinsics = []
-            frame_w2c = []
+                frame_filenames = []
+                frame_intrinsics = []
+                frame_w2c = []
             
                 for cam_id in sorted(cam_ids):
                     if cam_id in timestep_data:
