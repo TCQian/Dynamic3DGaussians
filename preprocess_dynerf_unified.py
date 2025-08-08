@@ -57,7 +57,9 @@ class UnifiedDyNeRFPreprocessor:
         self.dense_dir = os.path.join(self.colmap_workspace, "dense")
         
         if os.path.exists(self.colmap_workspace):
+            print("Folder exists, deleting...")
             shutil.rmtree(self.colmap_workspace)
+            print("Deleted.")
         os.makedirs(self.output_seq_dir, exist_ok=True)
         os.makedirs(self.colmap_workspace, exist_ok=True)
         os.makedirs(self.images_dir, exist_ok=True)
@@ -174,6 +176,7 @@ class UnifiedDyNeRFPreprocessor:
                 cam_frames.append(frame_filename)
                 
                 # Save ONLY FIRST frame for COLMAP - ONLY FOR TRAIN CAMERAS
+                # Note: Using single frame might cause dense reconstruction issues
                 if frame_count == 0 and cam_id in train_cam_ids:
                     colmap_image_name = f"cam_{cam_id:02d}_frame_000.jpg"
                     colmap_image_path = os.path.join(self.images_dir, colmap_image_name)
@@ -291,11 +294,27 @@ class UnifiedDyNeRFPreprocessor:
             print("Sparse SfM failed - no points3D found")
             return False
         
-        print("  Sparse SfM successful, running dense reconstruction...")
+        print("  Sparse SfM successful, testing dense reconstruction capabilities...")
+        
+        # Test if COLMAP supports dense reconstruction
+        test_cmd = [self.colmap_exe, "image_undistorter", "--help"]
+        test_result = subprocess.run(test_cmd, capture_output=True, text=True)
+        if test_result.returncode != 0:
+            print(f"  Error: COLMAP does not support image_undistorter command")
+            print(f"  This COLMAP build may not include dense reconstruction features")
+            print(f"  Falling back to sparse point cloud...")
+            return True  # Continue with sparse reconstruction only
+        
+        print("  COLMAP dense reconstruction commands available, proceeding...")
         
         # Create dense reconstruction directories
         self.dense_dir = os.path.join(self.colmap_workspace, "dense")
         os.makedirs(self.dense_dir, exist_ok=True)
+        
+        print(f"  Created dense directory: {self.dense_dir}")
+        print(f"  Input sparse directory: {self.sparse_dir}")
+        print(f"  Input images directory: {self.images_dir}")
+        print(f"  Number of images: {len([f for f in os.listdir(self.images_dir) if f.endswith('.jpg')])}")
         
         # Step 1: Undistort images
         print("  Step 1/3: Undistorting images...")
@@ -309,7 +328,16 @@ class UnifiedDyNeRFPreprocessor:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Image undistortion failed: {result.stderr}")
+            print(f"STDOUT: {result.stdout}")
+            print(f"Command: {' '.join(cmd)}")
             return False
+        else:
+            print("  Image undistortion successful")
+            # Check if undistorted images were created
+            dense_images_dir = os.path.join(self.dense_dir, "images")
+            if os.path.exists(dense_images_dir):
+                num_undistorted = len([f for f in os.listdir(dense_images_dir) if f.endswith('.jpg')])
+                print(f"    Created {num_undistorted} undistorted images")
         
         # Step 2: Dense stereo matching  
         print("  Step 2/3: Computing dense stereo...")
@@ -323,7 +351,16 @@ class UnifiedDyNeRFPreprocessor:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Dense stereo failed: {result.stderr}")
+            print(f"STDOUT: {result.stdout}")
+            print(f"Command: {' '.join(cmd)}")
             return False
+        else:
+            print("  Dense stereo matching successful")
+            # Check if stereo files were created
+            stereo_dir = os.path.join(self.dense_dir, "stereo")
+            if os.path.exists(stereo_dir):
+                depth_maps = len([f for f in os.listdir(stereo_dir) if f.endswith('.geometric.bin')])
+                print(f"    Created {depth_maps} depth maps")
         
         # Step 3: Fusion to create dense point cloud
         print("  Step 3/3: Fusing dense point cloud...")
@@ -337,16 +374,47 @@ class UnifiedDyNeRFPreprocessor:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"Dense fusion failed: {result.stderr}")
+            print(f"STDOUT: {result.stdout}")
+            print(f"Command: {' '.join(cmd)}")
+            
+            # Check what files exist in dense directory
+            print(f"Dense directory contents:")
+            for root, dirs, files in os.walk(self.dense_dir):
+                level = root.replace(self.dense_dir, '').count(os.sep)
+                indent = ' ' * 2 * level
+                print(f"{indent}{os.path.basename(root)}/")
+                subindent = ' ' * 2 * (level + 1)
+                for file in files[:10]:  # Show first 10 files
+                    print(f"{subindent}{file}")
+                if len(files) > 10:
+                    print(f"{subindent}... and {len(files)-10} more files")
+            
             return False
+        else:
+            print("  Dense fusion successful")
             
         # Check if dense point cloud was created
         dense_ply_path = os.path.join(self.dense_dir, "fused.ply")
         dense_exists = os.path.exists(dense_ply_path)
         
         if dense_exists:
-            print(f"  Dense reconstruction successful: {dense_ply_path}")
+            # Get file size for verification
+            file_size = os.path.getsize(dense_ply_path) / (1024 * 1024)  # MB
+            print(f"  Dense reconstruction successful: {dense_ply_path} ({file_size:.1f} MB)")
         else:
             print("  Dense reconstruction failed - no fused.ply found")
+            print(f"  Expected path: {dense_ply_path}")
+            
+            # List what files were actually created
+            if os.path.exists(self.dense_dir):
+                print(f"  Files in dense directory:")
+                for f in os.listdir(self.dense_dir):
+                    fpath = os.path.join(self.dense_dir, f)
+                    if os.path.isfile(fpath):
+                        size = os.path.getsize(fpath) / 1024  # KB
+                        print(f"    {f} ({size:.1f} KB)")
+                    else:
+                        print(f"    {f}/ (directory)")
             
         return dense_exists
 
@@ -361,18 +429,29 @@ class UnifiedDyNeRFPreprocessor:
         print("Creating unified 3D and 2D segmentation with LLFF alignment...")
         print(f"Using {len(first_frame_images)} TRAIN cameras for dense point cloud generation")
         
-        # Step 1: Load COLMAP dense point cloud
-        dense_ply_path = os.path.join(self.dense_dir, "fused.ply")
-        points_colmap, colors = self.load_dense_point_cloud(dense_ply_path)
+        # Step 1: Load COLMAP point cloud (prefer dense, fallback to sparse)
+        points_colmap = np.array([])
+        colors = np.array([])
         
+        # Try dense point cloud first
+        if hasattr(self, 'dense_dir') and os.path.exists(self.dense_dir):
+            dense_ply_path = os.path.join(self.dense_dir, "fused.ply")
+            points_colmap, colors = self.load_dense_point_cloud(dense_ply_path)
+            if len(points_colmap) > 0:
+                print(f"  Using COLMAP dense point cloud: {len(points_colmap):,} points")
+        
+        # Fallback to sparse point cloud
         if len(points_colmap) == 0:
-            print("No dense point cloud found, trying sparse fallback...")
+            print("  No dense point cloud found, using sparse point cloud...")
             points3d_path = os.path.join(self.sparse_dir, "points3D.bin")
             points_colmap, colors = self.load_colmap_points(points3d_path)
+            if len(points_colmap) > 0:
+                print(f"  Using COLMAP sparse point cloud: {len(points_colmap):,} points")
             
-            if len(points_colmap) == 0:
-                print("No COLMAP points found, using fallback method")
-                return self.create_fallback_segmentation(all_frames)
+        # Final fallback
+        if len(points_colmap) == 0:
+            print("No COLMAP points found, using fallback method")
+            return self.create_fallback_segmentation(all_frames)
         
         # Step 2: Align COLMAP point cloud to LLFF coordinate system
         train_cam_ids = list(train_frames.keys())
