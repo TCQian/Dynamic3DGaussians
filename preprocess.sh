@@ -9,6 +9,7 @@
 
 source ~/.bashrc
 conda activate colmap
+pip install plyfile
 
 python preprocess_dynerf_unified.py \
 --data-dir ./data/dynerf \
