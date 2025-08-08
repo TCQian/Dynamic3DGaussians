@@ -16,4 +16,4 @@ python preprocess_dynerf_unified.py \
 --output-dir ./data/dynerf \
 --width 640 \
 --height 360 \
---colmap-exe /home/e/e0407638/github/colmap/build/src/colmap/exe/colmap \
+--colmap-exe /home/e/e0407638/github/colmap/build/src/colmap/exe/colmap
