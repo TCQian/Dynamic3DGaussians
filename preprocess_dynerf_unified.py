@@ -368,8 +368,14 @@ class UnifiedDyNeRFPreprocessor:
             # Check if stereo files were created
             stereo_dir = os.path.join(self.dense_dir, "stereo")
             if os.path.exists(stereo_dir):
-                depth_maps = len([f for f in os.listdir(stereo_dir) if f.endswith('.geometric.bin')])
-                print(f"    Created {depth_maps} depth maps")
+                all_files = os.listdir(stereo_dir)
+                depth_maps = len([f for f in all_files if f.endswith('.geometric.bin')])
+                normal_maps = len([f for f in all_files if f.endswith('.normal.bin')])
+                print(f"    Created {depth_maps} depth maps, {normal_maps} normal maps")
+                if len(all_files) > 0:
+                    print(f"    Stereo files: {all_files[:5]}...")  # Show first 5 files
+            else:
+                print("    Warning: No stereo directory created")
         
         # Step 3: Fusion to create dense point cloud
         print("  Step 3/3: Fusing dense point cloud...")
@@ -568,8 +574,13 @@ class UnifiedDyNeRFPreprocessor:
             ]
             
             color_found = False
+            # Get the actual dtype by calling the method
+            vertex_dtype = vertex.dtype()
+            field_names = vertex_dtype.names
+            print(f"  PLY vertex fields: {field_names}")
+            
             for r_field, g_field, b_field in color_fields:
-                if r_field in vertex.dtype.names and g_field in vertex.dtype.names and b_field in vertex.dtype.names:
+                if field_names and r_field in field_names and g_field in field_names and b_field in field_names:
                     r_vals = vertex[r_field]
                     g_vals = vertex[g_field] 
                     b_vals = vertex[b_field]
@@ -588,6 +599,34 @@ class UnifiedDyNeRFPreprocessor:
                     print(f"    Found colors using fields: {r_field}, {g_field}, {b_field}")
                     break
             
+            # If no colors found using field names, try direct access
+            if not color_found:
+                print("  Trying direct field access without dtype.names...")
+                for r_field, g_field, b_field in color_fields:
+                    try:
+                        r_vals = vertex[r_field]
+                        g_vals = vertex[g_field] 
+                        b_vals = vertex[b_field]
+                        
+                        # Normalize to [0, 1] range
+                        if r_vals.max() > 1.0:  # Assume 0-255 range
+                            colors[:, 0] = r_vals / 255.0
+                            colors[:, 1] = g_vals / 255.0
+                            colors[:, 2] = b_vals / 255.0
+                        else:  # Already in [0, 1] range
+                            colors[:, 0] = r_vals
+                            colors[:, 1] = g_vals
+                            colors[:, 2] = b_vals
+                        
+                        color_found = True
+                        print(f"    Found colors using direct access: {r_field}, {g_field}, {b_field}")
+                        break
+                    except KeyError:
+                        continue
+                    except Exception as e:
+                        print(f"    Error accessing {r_field}, {g_field}, {b_field}: {e}")
+                        continue
+            
             if not color_found:
                 print("    Warning: No color fields found, using default gray color")
                 colors.fill(0.5)  # Default gray color
@@ -600,16 +639,15 @@ class UnifiedDyNeRFPreprocessor:
             print(f"               G=[{colors[:,1].min():.3f}, {colors[:,1].max():.3f}]")
             print(f"               B=[{colors[:,2].min():.3f}, {colors[:,2].max():.3f}]")
             
-            # Print available fields for debugging
-            print(f"  PLY vertex fields: {vertex.dtype.names}")
-            
             return points, colors
             
         except ImportError:
             print(f"  Error: PlyData not available. Please install with: pip install plyfile")
+            return np.array([]), np.array([])
             
         except Exception as e:
             print(f"  Failed to read dense PLY with PlyData: {e}")
+            return np.array([]), np.array([])
 
     def load_colmap_cameras(self):
         """Load COLMAP camera parameters from binary files"""
