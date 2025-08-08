@@ -121,8 +121,8 @@ class UnifiedDyNeRFPreprocessor:
         
         return train_cam_ids, test_cam_ids
 
-    def extract_all_frames(self, target_size=(640, 360), max_frames=150):
-        """Extract ALL frames with proper train/test split, using only first frame for COLMAP"""
+    def extract_all_frames(self, target_size=(640, 360), max_frames=150, colmap_frames_per_cam=1):
+        """Extract ALL frames with proper train/test split, configurable frames for COLMAP"""
         print("Extracting frames from all cameras...")
         
         # Find video files
@@ -175,13 +175,14 @@ class UnifiedDyNeRFPreprocessor:
                 Image.fromarray(frame_rgb).save(frame_path, quality=95)
                 cam_frames.append(frame_filename)
                 
-                # Save ONLY FIRST frame for COLMAP - ONLY FOR TRAIN CAMERAS
-                # Note: Using single frame might cause dense reconstruction issues
-                if frame_count == 0 and cam_id in train_cam_ids:
-                    colmap_image_name = f"cam_{cam_id:02d}_frame_000.jpg"
+                # Save first N frames for COLMAP - ONLY FOR TRAIN CAMERAS
+                if frame_count < colmap_frames_per_cam and cam_id in train_cam_ids:
+                    colmap_image_name = f"cam_{cam_id:02d}_frame_{frame_count:03d}.jpg"
                     colmap_image_path = os.path.join(self.images_dir, colmap_image_name)
                     Image.fromarray(frame_rgb).save(colmap_image_path, quality=95)
-                    first_frame_images[cam_id] = [colmap_image_name]
+                    if cam_id not in first_frame_images:
+                        first_frame_images[cam_id] = []
+                    first_frame_images[cam_id].append(colmap_image_name)
 
                 frame_count += 1
             
@@ -196,8 +197,8 @@ class UnifiedDyNeRFPreprocessor:
             
             print(f"  Camera {cam_id:02d}: extracted {len(cam_frames)} frames ({'TRAIN' if cam_id in train_cam_ids else 'TEST'})")
         
-        total_colmap_images = len(first_frame_images)
-        print(f"\nCOLMAP will use {total_colmap_images} images from {len(first_frame_images)} TRAIN cameras (1 frame each)")
+        total_colmap_images = sum(len(frames) for frames in first_frame_images.values())
+        print(f"\nCOLMAP will use {total_colmap_images} images from {len(first_frame_images)} TRAIN cameras ({colmap_frames_per_cam} frames each)")
         return all_frames, train_frames, test_frames, first_frame_images
 
     def run_colmap_on_first_frame(self, poses, h_orig, w_orig, f_orig, target_size=(640, 360)):
@@ -288,7 +289,15 @@ class UnifiedDyNeRFPreprocessor:
             print("STDOUT:", result.stdout)
             return False
         
-        points3d_exists = os.path.exists(os.path.join(self.sparse_dir, "points3D.txt"))
+        # Check for both binary and text formats
+        points3d_bin = os.path.join(self.sparse_dir, "points3D.bin")
+        points3d_txt = os.path.join(self.sparse_dir, "points3D.txt")
+        points3d_exists = os.path.exists(points3d_bin) or os.path.exists(points3d_txt)
+        
+        if os.path.exists(points3d_bin):
+            print(f"  Sparse SfM successful - found points3D.bin ({os.path.getsize(points3d_bin)/1024:.1f} KB)")
+        elif os.path.exists(points3d_txt):
+            print(f"  Sparse SfM successful - found points3D.txt ({os.path.getsize(points3d_txt)/1024:.1f} KB)")
         
         if not points3d_exists:
             print("Sparse SfM failed - no points3D found")
@@ -443,11 +452,11 @@ class UnifiedDyNeRFPreprocessor:
         # Fallback to sparse point cloud
         if len(points_colmap) == 0:
             print("  No dense point cloud found, using sparse point cloud...")
-            points3d_path = os.path.join(self.sparse_dir, "points3D.bin")
+        points3d_path = os.path.join(self.sparse_dir, "points3D.bin")
             points_colmap, colors = self.load_colmap_points(points3d_path)
             if len(points_colmap) > 0:
                 print(f"  Using COLMAP sparse point cloud: {len(points_colmap):,} points")
-            
+        
         # Final fallback
         if len(points_colmap) == 0:
             print("No COLMAP points found, using fallback method")
@@ -601,7 +610,7 @@ class UnifiedDyNeRFPreprocessor:
             
         except Exception as e:
             print(f"  Failed to read dense PLY with PlyData: {e}")
-            
+
     def load_colmap_cameras(self):
         """Load COLMAP camera parameters from binary files"""
         import struct
@@ -878,10 +887,10 @@ class UnifiedDyNeRFPreprocessor:
                 for frame_filename in frames:
                     # Create all-foreground mask (all pixels = 255 = foreground)
                     foreground_mask = np.full((h, w), 255, dtype=np.uint8)
-                    
-                    # Save mask in CMU format: seg/cam_id/timestamp.png
-                    mask_filename = frame_filename.replace('.jpg', '.png')
-                    mask_path = os.path.join(cam_seg_dir, mask_filename)
+                
+                # Save mask in CMU format: seg/cam_id/timestamp.png
+                mask_filename = frame_filename.replace('.jpg', '.png')
+                mask_path = os.path.join(cam_seg_dir, mask_filename)
                     Image.fromarray(foreground_mask).save(mask_path)
 
 
@@ -977,26 +986,26 @@ class UnifiedDyNeRFPreprocessor:
         # Helper function to create metadata from camera data
         def create_metadata_from_cameras(cam_ids, camera_data_list, metadata_type):
             metadata = {
-                'w': w_target,
-                'h': h_target,
-                'fn': [],
-                'k': [],
-                'w2c': []
-            }
-            
+            'w': w_target,
+            'h': h_target,
+            'fn': [],
+            'k': [],
+            'w2c': []
+        }
+        
             for timestep_data in camera_data_list:
-                frame_filenames = []
-                frame_intrinsics = []
-                frame_w2c = []
-                
+            frame_filenames = []
+            frame_intrinsics = []
+            frame_w2c = []
+            
                 for cam_id in sorted(cam_ids):
                     if cam_id in timestep_data:
                         data = timestep_data[cam_id]
                         frame_filenames.append(data['filename'])
                         frame_intrinsics.append(data['intrinsics'])
                         frame_w2c.append(data['w2c'])
-                
-                if frame_filenames:
+            
+            if frame_filenames:
                     metadata['fn'].append(frame_filenames)
                     metadata['k'].append(frame_intrinsics)
                     metadata['w2c'].append(frame_w2c)
@@ -1033,7 +1042,8 @@ class UnifiedDyNeRFPreprocessor:
         poses, bounds, h, w, f = self.load_poses_bounds()
         
         # Extract all frames with train/test split
-        all_frames, train_frames, test_frames, first_frame_images = self.extract_all_frames(target_size, max_frames)
+        colmap_frames_per_cam = 3  # Use 3 frames per camera for better dense reconstruction
+        all_frames, train_frames, test_frames, first_frame_images = self.extract_all_frames(target_size, max_frames, colmap_frames_per_cam)
         
         # Run COLMAP on first frame (ONLY train cameras)
         colmap_success = self.run_colmap_on_first_frame(poses, h, w, f, target_size)
