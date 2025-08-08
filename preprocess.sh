@@ -9,6 +9,7 @@
 
 source ~/.bashrc
 conda activate colmap
+pip install plyfile
 
 python preprocess_dynerf_unified.py \
 --data-dir ./data/dynerf \
@@ -17,3 +18,4 @@ python preprocess_dynerf_unified.py \
 --width 640 \
 --height 360 \
 --colmap-exe /home/e/e0407638/github/colmap/build/src/colmap/exe/colmap \
+--colmap-frames 10
