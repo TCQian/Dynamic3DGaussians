@@ -994,6 +994,10 @@ class UnifiedDyNeRFPreprocessor:
         all_cam_frames = {**train_frames, **test_frames}
         max_frames = max(len(frames) for frames in all_cam_frames.values()) if all_cam_frames else 0
         
+        print(f"  DEBUG: max_frames = {max_frames}")
+        print(f"  DEBUG: sample cam frames count: {[(k, len(v)) for k, v in list(all_cam_frames.items())[:3]]}")
+        print(f"  DEBUG: sample frames: {list(all_cam_frames.values())[0][:5]} ... {list(all_cam_frames.values())[0][-5:]}")
+        
         # Helper function to get camera data using LLFF poses
         def get_camera_data_llff(cam_id, frame_filename):
             # Use scaled LLFF intrinsics for all cameras
@@ -1021,6 +1025,8 @@ class UnifiedDyNeRFPreprocessor:
             if timestep_data:
                 all_camera_data.append(timestep_data)
         
+        print(f"  DEBUG: Built {len(all_camera_data)} timesteps of camera data")
+        
         # Helper function to create metadata from camera data
         def create_metadata_from_cameras(cam_ids, camera_data_list, metadata_type):
             metadata = {
@@ -1043,7 +1049,7 @@ class UnifiedDyNeRFPreprocessor:
                         frame_intrinsics.append(data['intrinsics'])
                         frame_w2c.append(data['w2c'])
             
-            if frame_filenames:
+                if frame_filenames:
                     metadata['fn'].append(frame_filenames)
                     metadata['k'].append(frame_intrinsics)
                     metadata['w2c'].append(frame_w2c)
