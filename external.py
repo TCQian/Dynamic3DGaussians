@@ -216,6 +216,10 @@ def densify(params, variables, optimizer, i):
 
             params, variables = remove_points(to_remove, params, variables, optimizer)
 
+            # Record number of Gaussian points remaining after densify step
+            num_remaining = params['means3D'].shape[0]
+            print(f"Iteration {i}: {num_remaining} Gaussian points remaining after densify")
+
             torch.cuda.empty_cache()
 
         if i > 0 and i % 3000 == 0:

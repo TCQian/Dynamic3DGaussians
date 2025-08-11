@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH --job-name=3DG                   # Job name
+#SBATCH --job-name=3DG-0.25-thresh       # Job name
 #SBATCH --time=2:00:00                   # Time limit hrs:min:sec
 #SBATCH --gres=gpu:h100-47:1             # must use this GPU, since pytorch3d relied on it
 #SBATCH --mail-type=ALL                  # Get email for all status updates
@@ -10,5 +10,5 @@
 source ~/.bashrc
 conda activate 3dg
 
-python train.py --dataset-type dynerf --exp-name dynerf --data-dir ./data/dynerf --dataset cut_roasted_beef
-python render.py --exp-name dynerf --data-dir ./data/dynerf --dataset cut_roasted_beef
+python train.py --dataset-type dynerf --exp-name dynerf-0.25-thresh --data-dir ./data/dynerf --dataset cut_roasted_beef
+python render.py --exp-name dynerf-0.25-thresh --data-dir ./data/dynerf --dataset cut_roasted_beef
