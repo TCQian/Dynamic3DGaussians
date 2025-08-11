@@ -107,18 +107,25 @@ class UnifiedDyNeRFPreprocessor:
 
     def get_train_test_split(self, all_cam_ids):
         """
-        Get train/test camera split following CMU basketball format
-        CMU uses: train = all except [0, 10, 15, 30], test = [0, 10, 15, 30]
-        We use: train = all except [1, 10, 15, 19], test = [1, 10, 15, 19]
+        Robust train/test split:
+        - Choose up to 4 test cameras from available ids (evenly spread)
+        - Remaining cameras are used for training
         """
-        test_cam_ids = set([1, 10, 15, 19])
-        missing = test_cam_ids - set(all_cam_ids)
-        assert not missing, f"Camera ids {missing} are not found"
+        if len(all_cam_ids) == 0:
+            return [], []
+
+        num_test = min(4, len(all_cam_ids))
+        if num_test == 0:
+            return all_cam_ids, []
+
+        # Evenly spaced selection across sorted camera ids
+        indices = np.linspace(0, len(all_cam_ids) - 1, num=num_test, dtype=int)
+        test_cam_ids = set([all_cam_ids[i] for i in indices])
         train_cam_ids = [cam_id for cam_id in all_cam_ids if cam_id not in test_cam_ids]
-        
+
         print(f"Train cameras: {train_cam_ids}")
-        print(f"Test cameras: {list(test_cam_ids)}")
-        
+        print(f"Test cameras: {sorted(list(test_cam_ids))}")
+
         return train_cam_ids, test_cam_ids
 
     def extract_all_frames(self, target_size=(640, 360), max_frames=150, colmap_frames_per_cam=1):
@@ -175,8 +182,8 @@ class UnifiedDyNeRFPreprocessor:
                 Image.fromarray(frame_rgb).save(frame_path, quality=95)
                 cam_frames.append(frame_filename)
                 
-                # Save first N frames for COLMAP - ONLY FOR TRAIN CAMERAS
-                if frame_count < colmap_frames_per_cam and cam_id in train_cam_ids:
+                # Save first N frames for COLMAP for ALL CAMERAS (to obtain extrinsics/intrinsics)
+                if frame_count < colmap_frames_per_cam:
                     colmap_image_name = f"cam_{cam_id:02d}_frame_{frame_count:03d}.jpg"
                     colmap_image_path = os.path.join(self.images_dir, colmap_image_name)
                     Image.fromarray(frame_rgb).save(colmap_image_path, quality=95)
@@ -198,24 +205,15 @@ class UnifiedDyNeRFPreprocessor:
             print(f"  Camera {cam_id:02d}: extracted {len(cam_frames)} frames ({'TRAIN' if cam_id in train_cam_ids else 'TEST'})")
         
         total_colmap_images = sum(len(frames) for frames in first_frame_images.values())
-        print(f"\nCOLMAP will use {total_colmap_images} images from {len(first_frame_images)} TRAIN cameras ({colmap_frames_per_cam} frames each)")
+        print(f"\nCOLMAP will use {total_colmap_images} images from {len(first_frame_images)} cameras ({colmap_frames_per_cam} frames each)")
         return all_frames, train_frames, test_frames, first_frame_images
 
-    def run_colmap_on_first_frame(self, poses, h_orig, w_orig, f_orig, target_size=(640, 360)):
-        """Run COLMAP SfM and dense reconstruction on first frame with proper camera parameter scaling"""
+    def run_colmap_on_first_frame(self, target_size=(640, 360)):
+        """Run COLMAP SfM and dense reconstruction on first frames without forcing a single camera or fixed intrinsics"""
         print("Running COLMAP SfM and dense reconstruction on first frame...")
         
         w_target, h_target = target_size
-        
-        # Scale focal length and principal point for resized images
-        scale_x = w_target / w_orig
-        scale_y = h_target / h_orig
-        f_scaled = f_orig * scale_x  # Assume uniform scaling
-        cx_scaled = w_target / 2
-        cy_scaled = h_target / 2
-        
-        print(f"  Original: {w_orig}x{h_orig}, f={f_orig:.1f}")
-        print(f"  Target: {w_target}x{h_target}, f_scaled={f_scaled:.1f}")
+        print(f"  Target image size for COLMAP: {w_target}x{h_target}")
         
         # Create database
         if os.path.exists(self.database_path):
@@ -227,14 +225,12 @@ class UnifiedDyNeRFPreprocessor:
             print(f"Database creation failed: {result.stderr}")
             return False
         
-        # Feature extraction with better parameters for resized images
+        # Feature extraction with per-image cameras; let COLMAP estimate intrinsics per camera
         cmd = [
             self.colmap_exe, "feature_extractor",
             "--database_path", self.database_path,
             "--image_path", self.images_dir,
-            "--ImageReader.single_camera", "1",
-            "--ImageReader.camera_model", "SIMPLE_PINHOLE",
-            "--ImageReader.camera_params", f"{f_scaled},{cx_scaled},{cy_scaled}",
+            "--ImageReader.camera_model", "SIMPLE_RADIAL",
             "--SiftExtraction.max_image_size", "2000",
             "--SiftExtraction.max_num_features", "16384",
             "--SiftExtraction.first_octave", "-1",
@@ -435,14 +431,13 @@ class UnifiedDyNeRFPreprocessor:
 
     def create_unified_segmentation(self, all_frames, train_frames, first_frame_images, cameras, poses):
         """
-        Create unified segmentation strategy with LLFF alignment:
-        1. Load COLMAP dense point cloud (generated from train cameras only) 
-        2. Align COLMAP point cloud to LLFF coordinate system
-        3. Label ALL points as foreground (no segmentation)
-        4. Create consistent 2D segmentation for all frames (all foreground)
+        Create unified segmentation strategy in COLMAP/OpenCV coordinates:
+        1. Load COLMAP dense point cloud (prefer dense, fallback to sparse)
+        2. Label ALL points as foreground (no segmentation)
+        3. Create consistent 2D segmentation for all frames (all foreground)
         """
-        print("Creating unified 3D and 2D segmentation with LLFF alignment...")
-        print(f"Using {len(first_frame_images)} TRAIN cameras for dense point cloud generation")
+        print("Creating unified 3D and 2D segmentation in COLMAP/OpenCV coordinates...")
+        print(f"Using {len(first_frame_images)} cameras for dense point cloud generation")
         
         # Step 1: Load COLMAP point cloud (prefer dense, fallback to sparse)
         points_colmap = np.array([])
@@ -468,27 +463,22 @@ class UnifiedDyNeRFPreprocessor:
             print("No COLMAP points found, using fallback method")
             return self.create_fallback_segmentation(all_frames)
         
-        # Step 2: Align COLMAP point cloud to LLFF coordinate system
-        train_cam_ids = list(train_frames.keys())
-        scale, R, t = self.align_colmap_to_llff(poses, cameras, train_cam_ids)
-        points_llff, colors = self.transform_dense_cloud_to_llff(points_colmap, colors, scale, R, t)
+        # Step 2: Label ALL points as foreground (no segmentation)
+        seg_3d = np.ones(len(points_colmap), dtype=np.float32)
         
-        # Step 3: Label ALL points as foreground (no segmentation)
-        seg_3d = np.ones(len(points_llff), dtype=np.float32)
-        
-        # Step 4: Create consistent 2D segmentation for all frames (all foreground)
+        # Step 3: Create consistent 2D segmentation for all frames (all foreground)
         self.create_foreground_2d_segmentation(all_frames)
         
-        # Step 5: Save 3D point cloud (use LLFF-aligned dense points)
-        init_pt_cld = np.column_stack([points_llff, colors, seg_3d])
+        # Step 4: Save 3D point cloud in COLMAP/OpenCV coordinate system
+        init_pt_cld = np.column_stack([points_colmap, colors, seg_3d])
         output_path = os.path.join(self.output_seq_dir, "init_pt_cld.npz")
         np.savez(output_path, data=init_pt_cld)
         
-        print(f"Created segmentation using LLFF-aligned dense points:")
-        print(f"  - Total points: {len(points_llff):,}")
+        print(f"Created segmentation using COLMAP/OpenCV points:")
+        print(f"  - Total points: {len(points_colmap):,}")
         print(f"  - Foreground: {np.sum(seg_3d):,} points ({np.mean(seg_3d)*100:.1f}%)")
         print(f"  - Background: {np.sum(1-seg_3d):,} points ({np.mean(1-seg_3d)*100:.1f}%)")
-        print(f"  - Point cloud now in LLFF coordinate system")
+        print(f"  - Point cloud saved in COLMAP/OpenCV coordinate system")
         
         return init_pt_cld
 
@@ -546,7 +536,7 @@ class UnifiedDyNeRFPreprocessor:
             return np.array([]), np.array([])
 
     def load_dense_point_cloud(self, ply_path):
-        """Load dense point cloud from PLY file using PlyData for guaranteed consistency"""
+        """Load dense point cloud from PLY file using PlyData (correct .data access)"""
         if not os.path.exists(ply_path):
             print(f"  Dense PLY file not found: {ply_path}")
             return np.array([]), np.array([])
@@ -558,7 +548,7 @@ class UnifiedDyNeRFPreprocessor:
             plydata = PlyData.read(ply_path)
             
             # Get vertex element
-            vertex = plydata['vertex']
+            vertex = plydata['vertex'].data
             
             # Extract coordinates (x, y, z)
             points = np.vstack([vertex['x'], vertex['y'], vertex['z']]).T
@@ -574,9 +564,8 @@ class UnifiedDyNeRFPreprocessor:
             ]
             
             color_found = False
-            # Get the actual dtype by calling the method
-            vertex_dtype = vertex.dtype()
-            field_names = vertex_dtype.names
+            # Get the actual dtype names
+            field_names = vertex.dtype.names
             print(f"  PLY vertex fields: {field_names}")
             
             for r_field, g_field, b_field in color_fields:
@@ -600,32 +589,7 @@ class UnifiedDyNeRFPreprocessor:
                     break
             
             # If no colors found using field names, try direct access
-            if not color_found:
-                print("  Trying direct field access without dtype.names...")
-                for r_field, g_field, b_field in color_fields:
-                    try:
-                        r_vals = vertex[r_field]
-                        g_vals = vertex[g_field] 
-                        b_vals = vertex[b_field]
-                        
-                        # Normalize to [0, 1] range
-                        if r_vals.max() > 1.0:  # Assume 0-255 range
-                            colors[:, 0] = r_vals / 255.0
-                            colors[:, 1] = g_vals / 255.0
-                            colors[:, 2] = b_vals / 255.0
-                        else:  # Already in [0, 1] range
-                            colors[:, 0] = r_vals
-                            colors[:, 1] = g_vals
-                            colors[:, 2] = b_vals
-                        
-                        color_found = True
-                        print(f"    Found colors using direct access: {r_field}, {g_field}, {b_field}")
-                        break
-                    except KeyError:
-                        continue
-                    except Exception as e:
-                        print(f"    Error accessing {r_field}, {g_field}, {b_field}: {e}")
-                        continue
+            # If no colors found using field names, leave default gray
             
             if not color_found:
                 print("    Warning: No color fields found, using default gray color")
@@ -663,6 +627,19 @@ class UnifiedDyNeRFPreprocessor:
             return None
         
         try:
+            CAMERA_MODELS = {
+                0: ("SIMPLE_PINHOLE", 3),
+                1: ("PINHOLE", 4),
+                2: ("SIMPLE_RADIAL", 4),
+                3: ("RADIAL", 5),
+                4: ("OPENCV", 8),
+                5: ("OPENCV_FISHEYE", 8),
+                6: ("FULL_OPENCV", 12),
+                7: ("FOV", 5),
+                8: ("SIMPLE_RADIAL_FISHEYE", 4),
+                9: ("RADIAL_FISHEYE", 5),
+                10: ("THIN_PRISM_FISHEYE", 12),
+            }
             # Read cameras.bin (intrinsics)
             with open(cameras_path, 'rb') as f:
                 num_cameras = struct.unpack('Q', f.read(8))[0]
@@ -673,17 +650,26 @@ class UnifiedDyNeRFPreprocessor:
                     width = struct.unpack('Q', f.read(8))[0]
                     height = struct.unpack('Q', f.read(8))[0]
                     
-                    # Read intrinsic parameters (for SIMPLE_PINHOLE: f, cx, cy)
-                    if model_id == 0:  # SIMPLE_PINHOLE
-                        params = struct.unpack('ddd', f.read(24))
-                        f, cx, cy = params
-                        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+                    # Determine number of params from model_id
+                    model_name, num_params = CAMERA_MODELS.get(model_id, ("UNKNOWN", 0))
+                    if num_params == 0:
+                        raise RuntimeError(f"Unknown camera model id: {model_id}")
+                    params = struct.unpack('d' * num_params, f.read(8 * num_params))
+                    # Build K from known models
+                    if model_name in ("SIMPLE_PINHOLE", "SIMPLE_RADIAL", "RADIAL", "SIMPLE_RADIAL_FISHEYE", "RADIAL_FISHEYE"):
+                        fxy, cx, cy = params[0], params[1], params[2]
+                        fx = fy = fxy
+                    elif model_name in ("PINHOLE", "OPENCV", "OPENCV_FISHEYE", "FULL_OPENCV", "THIN_PRISM_FISHEYE"):
+                        fx, fy, cx, cy = params[0], params[1], params[2], params[3]
+                    elif model_name == "FOV":
+                        fxy, cx, cy = params[0], params[1], params[2]
+                        fx = fy = fxy
                     else:
-                        # Handle other camera models if needed
-                        num_params = 3  # Assume 3 for now
-                        params = struct.unpack('d' * num_params, f.read(8 * num_params))
-                        f, cx, cy = params[:3]
-                        K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+                        # Fallback
+                        fx = fy = params[0] if len(params) > 0 else float(width)
+                        cx = params[1] if len(params) > 1 else width / 2
+                        cy = params[2] if len(params) > 2 else height / 2
+                    K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]])
                     
                     cameras[camera_id] = {'K': K, 'width': width, 'height': height}
             
@@ -925,11 +911,10 @@ class UnifiedDyNeRFPreprocessor:
                 for frame_filename in frames:
                     # Create all-foreground mask (all pixels = 255 = foreground)
                     foreground_mask = np.full((h, w), 255, dtype=np.uint8)
-                
-                # Save mask in CMU format: seg/cam_id/timestamp.png
-                mask_filename = frame_filename.replace('.jpg', '.png')
-                mask_path = os.path.join(cam_seg_dir, mask_filename)
-                Image.fromarray(foreground_mask).save(mask_path)
+                    # Save mask in CMU format: seg/cam_id/timestamp.png
+                    mask_filename = frame_filename.replace('.jpg', '.png')
+                    mask_path = os.path.join(cam_seg_dir, mask_filename)
+                    Image.fromarray(foreground_mask).save(mask_path)
 
 
     def create_fallback_segmentation(self, all_frames):
@@ -974,99 +959,57 @@ class UnifiedDyNeRFPreprocessor:
             print(f"    Warning: cam_id {cam_id} not found in camera mapping, using identity")
             return np.eye(4)
 
-    def create_metadata_llff_centric(self, poses, train_frames, test_frames, target_size, f_orig):
-        """Create metadata using LLFF poses for ALL cameras - consistent coordinate system"""
-        print("Creating LLFF-centric train and test metadata...")
-        
+    def create_metadata_colmap_centric(self, cameras, train_frames, test_frames, target_size):
+        """Create metadata using COLMAP per-camera intrinsics and extrinsics (OpenCV w2c)."""
+        print("Creating COLMAP-centric train and test metadata...")
+
         w_target, h_target = target_size
-        
-        # Scale focal length to match resized images  
-        hwf = poses[0, :, 4]  # HWF from poses
-        w_orig = int(hwf[1])  # Original width from HWF
-        scale_x = w_target / w_orig
-        f_scaled = f_orig * scale_x
-        
-        print(f"  Metadata dimensions: {w_target}x{h_target} (target)")
-        print(f"  Focal length: {f_orig:.1f} -> {f_scaled:.1f} (scaled)")
-        print("  Using LLFF poses for ALL cameras (consistent coordinate system)")
-        
-        # Combine all frames for processing
-        all_cam_frames = {**train_frames, **test_frames}
-        max_frames = max(len(frames) for frames in all_cam_frames.values()) if all_cam_frames else 0
-        
-        print(f"  DEBUG: max_frames = {max_frames}")
-        print(f"  DEBUG: sample cam frames count: {[(k, len(v)) for k, v in list(all_cam_frames.items())[:3]]}")
-        print(f"  DEBUG: sample frames: {list(all_cam_frames.values())[0][:5]} ... {list(all_cam_frames.values())[0][-5:]}")
-        
-        # Helper function to get camera data using LLFF poses
-        def get_camera_data_llff(cam_id, frame_filename):
-            # Use scaled LLFF intrinsics for all cameras
-            intrinsics = [[f_scaled, 0, w_target/2], [0, f_scaled, h_target/2], [0, 0, 1]]
-            
-            # Use LLFF w2c matrix for all cameras
-            w2c_matrix = self.get_llff_w2c_matrix(cam_id, poses)
-            
-            return {
-                'filename': f"{cam_id}/{frame_filename}",
-                'intrinsics': intrinsics,
-                'w2c': w2c_matrix.tolist()
-            }
-        
-        # Build complete camera data for all timesteps using LLFF
-        all_camera_data = []
-        for t in range(max_frames):
-            timestep_data = {}
-            
-            for cam_id in sorted(all_cam_frames.keys()):
-                if t < len(all_cam_frames[cam_id]):
-                    frame_filename = all_cam_frames[cam_id][t]
-                    timestep_data[cam_id] = get_camera_data_llff(cam_id, frame_filename)
-            
-            if timestep_data:
-                all_camera_data.append(timestep_data)
-        
-        print(f"  DEBUG: Built {len(all_camera_data)} timesteps of camera data")
-        
-        # Helper function to create metadata from camera data
-        def create_metadata_from_cameras(cam_ids, camera_data_list, metadata_type):
-            metadata = {
-            'w': w_target,
-            'h': h_target,
-            'fn': [],
-            'k': [],
-            'w2c': []
-        }
-        
-            for timestep_data in camera_data_list:
-                frame_filenames = []
-                frame_intrinsics = []
-                frame_w2c = []
-            
+
+        def find_K_R_t_for_cam(cam_id):
+            image_name = f"cam_{cam_id:02d}_frame_000.jpg"
+            for cam_key, cam_info in cameras.items():
+                if 'images' in cam_info and image_name in cam_info['images']:
+                    K = cam_info['K']
+                    R = cam_info['images'][image_name]['R']
+                    t = cam_info['images'][image_name]['t']
+                    return K, R, t
+            return None, None, None
+
+        def build_metadata(cam_ids, frames_dict, metadata_type):
+            if len(cam_ids) == 0:
+                return
+            # enforce fixed cameras per timestep: use min common T
+            T = min(len(frames_dict[c]) for c in cam_ids)
+            meta = {'w': w_target, 'h': h_target, 'fn': [], 'k': [], 'w2c': []}
+            for t in range(T):
+                fns_t, ks_t, w2cs_t = [], [], []
                 for cam_id in sorted(cam_ids):
-                    if cam_id in timestep_data:
-                        data = timestep_data[cam_id]
-                        frame_filenames.append(data['filename'])
-                        frame_intrinsics.append(data['intrinsics'])
-                        frame_w2c.append(data['w2c'])
-            
-                if frame_filenames:
-                    metadata['fn'].append(frame_filenames)
-                    metadata['k'].append(frame_intrinsics)
-                    metadata['w2c'].append(frame_w2c)
-            
-            # Save metadata
-            metadata_path = os.path.join(self.output_seq_dir, f"{metadata_type}_meta.json")
-            with open(metadata_path, 'w') as file_handle:
-                json.dump(metadata, file_handle, indent=2)
-            
-            print(f"Created {metadata_type} metadata: {len(metadata['fn'])} timesteps, {len(cam_ids)} cameras (LLFF poses)")
-            return metadata
-        
-        # Create train and test metadata using LLFF poses
-        train_cam_ids = list(train_frames.keys())
-        test_cam_ids = list(test_frames.keys())
-        train_metadata = create_metadata_from_cameras(train_cam_ids, all_camera_data, "train")
-        test_metadata = create_metadata_from_cameras(test_cam_ids, all_camera_data, "test")
+                    K, R, t_vec = find_K_R_t_for_cam(cam_id)
+                    if K is None or R is None or t_vec is None:
+                        # Fallback: identity w2c and approximate intrinsics
+                        K = np.array([[w_target, 0, w_target/2], [0, h_target, h_target/2], [0, 0, 1]])
+                        R = np.eye(3)
+                        t_vec = np.zeros(3)
+                    w2c = np.eye(4)
+                    w2c[:3, :3] = R
+                    w2c[:3, 3] = t_vec
+                    fns_t.append(f"{cam_id}/{frames_dict[cam_id][t]}")
+                    ks_t.append(K.tolist())
+                    w2cs_t.append(w2c.tolist())
+                meta['fn'].append(fns_t)
+                meta['k'].append(ks_t)
+                meta['w2c'].append(w2cs_t)
+
+            out_path = os.path.join(self.output_seq_dir, f"{metadata_type}_meta.json")
+            with open(out_path, 'w') as fh:
+                json.dump(meta, fh, indent=2)
+            print(f"Created {metadata_type} metadata: {len(meta['fn'])} timesteps, {len(cam_ids)} cameras (COLMAP)")
+            return meta
+
+        train_cam_ids = sorted(list(train_frames.keys()))
+        test_cam_ids = sorted(list(test_frames.keys()))
+        build_metadata(train_cam_ids, train_frames, 'train')
+        build_metadata(test_cam_ids, test_frames, 'test')
 
     def run_unified_preprocessing(self, target_size=(640, 360), max_frames=150):
         """Run complete unified preprocessing with proper train/test split using dense point clouds"""
@@ -1082,27 +1025,26 @@ class UnifiedDyNeRFPreprocessor:
         except:
             print("Warning: COLMAP not found, using fallback method")
         
-        # Load poses
-        poses, bounds, h, w, f = self.load_poses_bounds()
-        
         # Extract all frames with train/test split
         colmap_frames_per_cam = 3  # Use 3 frames per camera for better dense reconstruction
         all_frames, train_frames, test_frames, first_frame_images = self.extract_all_frames(target_size, max_frames, colmap_frames_per_cam)
         
         # Run COLMAP on first frame (ONLY train cameras)
-        colmap_success = self.run_colmap_on_first_frame(poses, h, w, f, target_size)
+        colmap_success = self.run_colmap_on_first_frame(target_size)
         
         # Create unified segmentation (using train cameras for point cloud)
         cameras = self.load_colmap_cameras()  # Load actual camera parameters
-        self.create_unified_segmentation(all_frames, train_frames, first_frame_images, cameras, poses)
+        self.create_unified_segmentation(all_frames, train_frames, first_frame_images, cameras, None)
         
-        # Create metadata (separate train and test) with TARGET dimensions - LLFF-centric
-        self.create_metadata_llff_centric(poses, train_frames, test_frames, target_size, f)
+        # Create metadata (separate train and test) with TARGET dimensions - COLMAP-centric
+        if cameras is None:
+            print("Warning: COLMAP cameras not found; metadata will use fallback intrinsics/extrinsics")
+        self.create_metadata_colmap_centric(cameras if cameras is not None else {}, train_frames, test_frames, target_size)
         
         print("Unified preprocessing completed!")
         print(f"Output: {self.output_seq_dir}")
-        print(" Point cloud generated from TRAIN cameras only")
-        print(" Separate train_meta.json and test_meta.json created")
+        print(" Point cloud generated and saved in COLMAP/OpenCV coordinates")
+        print(" Separate train_meta.json and test_meta.json created (fixed cameras per timestep)")
         
         return True
 
