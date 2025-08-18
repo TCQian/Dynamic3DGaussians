@@ -35,6 +35,7 @@ import argparse
 import shutil
 import re
 from plyfile import PlyData, PlyElement
+import open3d as o3d
 
 class UnifiedDyNeRFPreprocessor:
     """Unified preprocessing ensuring consistent 3D and 2D segmentation"""
@@ -446,6 +447,7 @@ class UnifiedDyNeRFPreprocessor:
         # Try dense point cloud first
         if hasattr(self, 'dense_dir') and os.path.exists(self.dense_dir):
             dense_ply_path = os.path.join(self.dense_dir, "fused.ply")
+            dense_ply_path = self.process_ply_file(dense_ply_path, dense_ply_path.replace(".ply", "_downsampled.ply"))
             points_colmap, colors = self.load_dense_point_cloud(dense_ply_path)
             if len(points_colmap) > 0:
                 print(f"  Using COLMAP dense point cloud: {len(points_colmap):,} points")
@@ -533,6 +535,26 @@ class UnifiedDyNeRFPreprocessor:
             
         except Exception as e:
             print(f"  Failed to read COLMAP binary: {e}")
+            return np.array([]), np.array([])
+
+    def process_ply_file(self, input_file, output_file):
+        try:
+            print(f"  Downsampling PLY file: {input_file} containing {len(pcd.points)} points")
+            pcd = o3d.io.read_point_cloud(input_file)
+            print(f"Total points: {len(pcd.points)}")
+
+            voxel_size=0.02
+            while len(pcd.points) > 20000:
+                pcd = pcd.voxel_down_sample(voxel_size=voxel_size)
+                print(f"Downsampled points: {len(pcd.points)}")
+                voxel_size+=0.01
+            o3d.io.write_point_cloud(output_file, pcd)
+
+            print(f"  Downsampled PLY file: {output_file} to {len(pcd.points)} points")
+            return output_file
+
+        except Exception as e:
+            print(f"  Failed to downsample PLY file: {e}")
             return np.array([]), np.array([])
 
     def load_dense_point_cloud(self, ply_path):
