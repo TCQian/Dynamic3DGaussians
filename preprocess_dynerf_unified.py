@@ -539,9 +539,8 @@ class UnifiedDyNeRFPreprocessor:
 
     def process_ply_file(self, input_file, output_file):
         try:
-            print(f"  Downsampling PLY file: {input_file} containing {len(pcd.points)} points")
             pcd = o3d.io.read_point_cloud(input_file)
-            print(f"Total points: {len(pcd.points)}")
+            print(f"  Downsampling PLY file: {input_file} containing {len(pcd.points)} points")
 
             voxel_size=0.02
             while len(pcd.points) > 20000:
