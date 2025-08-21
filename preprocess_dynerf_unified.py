@@ -221,9 +221,14 @@ class UnifiedDyNeRFPreprocessor:
             os.remove(self.database_path)
         
         cmd = [self.colmap_exe, "database_creator", "--database_path", self.database_path]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Database creation failed: {result.stderr}")
+        print(f"  Running: {' '.join(cmd)}")
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"    {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
+            print(f"Database creation failed with return code {return_code}")
             return False
         
         # Feature extraction with per-image cameras; let COLMAP estimate intrinsics per camera
@@ -237,10 +242,14 @@ class UnifiedDyNeRFPreprocessor:
             "--SiftExtraction.first_octave", "-1",
             "--SiftExtraction.octave_resolution", "3"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Feature extraction failed: {result.stderr}")
-            print("STDOUT:", result.stdout)
+        print(f"  Running: {' '.join(cmd)}")
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"    {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
+            print(f"Feature extraction failed with return code {return_code}")
             return False
         else:
             print(f"  Feature extraction successful")
@@ -255,10 +264,14 @@ class UnifiedDyNeRFPreprocessor:
             "--SiftMatching.cross_check", "1",
             "--SiftMatching.max_num_matches", "32768"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Feature matching failed: {result.stderr}")
-            print("STDOUT:", result.stdout)
+        print(f"  Running: {' '.join(cmd)}")
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"    {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
+            print(f"Feature matching failed with return code {return_code}")
             return False
         else:
             print(f"  Feature matching successful")
@@ -280,10 +293,14 @@ class UnifiedDyNeRFPreprocessor:
             "--Mapper.max_focal_length_ratio", "10.0",
             "--Mapper.max_extra_param", "1.0"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"SfM failed: {result.stderr}")
-            print("STDOUT:", result.stdout)
+        print(f"  Running: {' '.join(cmd)}")
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"    {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
+            print(f"SfM failed with return code {return_code}")
             return False
         
         # Check for both binary and text formats
@@ -304,8 +321,13 @@ class UnifiedDyNeRFPreprocessor:
         
         # Test if COLMAP supports dense reconstruction
         test_cmd = [self.colmap_exe, "image_undistorter", "--help"]
-        test_result = subprocess.run(test_cmd, capture_output=True, text=True)
-        if test_result.returncode != 0:
+        print(f"  Testing dense reconstruction support: {' '.join(test_cmd)}")
+        process = subprocess.Popen(test_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"    {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
             print(f"  Error: COLMAP does not support image_undistorter command")
             print(f"  This COLMAP build may not include dense reconstruction features")
             print(f"  Falling back to sparse point cloud...")
@@ -331,11 +353,14 @@ class UnifiedDyNeRFPreprocessor:
             "--output_path", self.dense_dir,
             "--output_type", "COLMAP"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Image undistortion failed: {result.stderr}")
-            print(f"STDOUT: {result.stdout}")
-            print(f"Command: {' '.join(cmd)}")
+        print(f"  Running: {' '.join(cmd)}")
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"    {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
+            print(f"Image undistortion failed with return code {return_code}")
             return False
         else:
             print("  Image undistortion successful")
@@ -354,11 +379,14 @@ class UnifiedDyNeRFPreprocessor:
             "--workspace_format", "COLMAP",
             "--PatchMatchStereo.max_image_size", "2000"
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Dense stereo failed: {result.stderr}")
-            print(f"STDOUT: {result.stdout}")
-            print(f"Command: {' '.join(cmd)}")
+        print(f"  Running: {' '.join(cmd)}")
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"    {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
+            print(f"Dense stereo failed with return code {return_code}")
             return False
         else:
             print("  Dense stereo matching successful")
@@ -383,11 +411,14 @@ class UnifiedDyNeRFPreprocessor:
             "--input_type", "geometric",
             "--output_path", os.path.join(self.dense_dir, "fused.ply")
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            print(f"Dense fusion failed: {result.stderr}")
-            print(f"STDOUT: {result.stdout}")
-            print(f"Command: {' '.join(cmd)}")
+        print(f"  Running: {' '.join(cmd)}")
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"    {line.rstrip()}")
+        return_code = process.wait()
+        if return_code != 0:
+            print(f"Dense fusion failed with return code {return_code}")
             
             # Check what files exist in dense directory
             print(f"Dense directory contents:")
@@ -1041,10 +1072,18 @@ class UnifiedDyNeRFPreprocessor:
         
         # Check COLMAP
         try:
-            subprocess.run([self.colmap_exe, "--help"], capture_output=True, check=True)
-            print("COLMAP found")
-        except:
-            print("Warning: COLMAP not found, using fallback method")
+            print(f"  Checking COLMAP availability: {self.colmap_exe} --help")
+            process = subprocess.Popen([self.colmap_exe, "--help"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=0)
+            for line in iter(process.stdout.readline, ''):
+                if line:
+                    print(f"    {line.rstrip()}")
+            return_code = process.wait()
+            if return_code == 0:
+                print("COLMAP found")
+            else:
+                print("Warning: COLMAP not found, using fallback method")
+        except Exception as e:
+            print(f"Warning: COLMAP not found ({e}), using fallback method")
         
         # Extract all frames with train/test split
         colmap_frames_per_cam = 3  # Use 3 frames per camera for better dense reconstruction
