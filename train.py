@@ -201,12 +201,14 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
             print("Please run preprocess.sh to generate required input files for training")
             return
 
+    print(f"Training {seq} with {dataset_type} dataset")
     md = json.load(open(f"{data_dir}/{seq}/train_meta.json", 'r'))  # metadata
     num_timesteps = len(md['fn'])
     params, variables = initialize_params(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
     for t in range(num_timesteps):
+        print(f"Training timestep {t}")
         dataset = get_dataset(t, md, seq, data_dir)
         todo_dataset = []
         is_initial_timestep = (t == 0)
