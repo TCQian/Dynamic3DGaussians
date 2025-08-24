@@ -286,7 +286,7 @@ class UnifiedDyNeRFPreprocessor:
             "exhaustive_matcher",
             "--database_path",
             self.database_path,
-            "--SiftMatching.guided_matching",
+            "--FeatureMatching.guided_matching",
             "1",
             "--SiftMatching.max_ratio",
             "0.8",
@@ -294,7 +294,7 @@ class UnifiedDyNeRFPreprocessor:
             "0.7",
             "--SiftMatching.cross_check",
             "1",
-            "--SiftMatching.max_num_matches",
+            "--FeatureMatching.max_num_matches",
             "32768",
         ]
         print(f"  Running: {' '.join(cmd)}")
