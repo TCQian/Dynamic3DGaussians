@@ -1339,8 +1339,8 @@ def main():
     parser.add_argument("--seq", type=str, default="cut_roasted_beef")
     parser.add_argument("--output-dir", type=str, default="./processed_unified")
     parser.add_argument("--max-frames", type=int, default=300)
-    parser.add_argument("--width", type=int, default=640, help="Target image width")
-    parser.add_argument("--height", type=int, default=360, help="Target image height")
+    parser.add_argument("--width", type=int, default=1352, help="Target image width")
+    parser.add_argument("--height", type=int, default=1014, help="Target image height")
     parser.add_argument(
         "--colmap-exe", type=str, default="colmap", help="Path to COLMAP executable"
     )
