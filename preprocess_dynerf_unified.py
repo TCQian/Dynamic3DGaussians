@@ -14,7 +14,7 @@ Features:
 - All 3D points labeled as foreground (no segmentation)
 - Uses COLMAP dense point cloud (typically much larger than sparse)
 - Simple foreground-only 2D/3D segmentation
-- Train/test camera splitting (test cameras: [1, 10, 15, 19])
+- Train/test camera splitting (test camera: first camera, train cameras: all others)
 - CMU format: ims/cam_id/timestamp.jpg, seg/cam_id/timestamp.png
 
 Usage:
@@ -24,18 +24,19 @@ Arguments:
     --width/height: Target image dimensions (default: 640x360)
 """
 
-import numpy as np
-import cv2
+import argparse
 import json
 import os
-import subprocess
-from PIL import Image
-from tqdm import tqdm
-import argparse
-import shutil
 import re
-from plyfile import PlyData, PlyElement
+import shutil
+import subprocess
+
+import cv2
+import numpy as np
 import open3d as o3d
+from PIL import Image
+from plyfile import PlyData, PlyElement
+from tqdm import tqdm
 
 
 class UnifiedDyNeRFPreprocessor:
@@ -111,24 +112,24 @@ class UnifiedDyNeRFPreprocessor:
 
     def get_train_test_split(self, all_cam_ids):
         """
-        Robust train/test split:
-        - Choose up to 4 test cameras from available ids (evenly spread)
-        - Remaining cameras are used for training
+        Train/test split:
+        - First camera (lowest ID) is used as test set
+        - All remaining cameras are used for training
         """
         if len(all_cam_ids) == 0:
             return [], []
 
-        num_test = min(4, len(all_cam_ids))
-        if num_test == 0:
-            return all_cam_ids, []
-
-        # Evenly spaced selection across sorted camera ids
-        indices = np.linspace(0, len(all_cam_ids) - 1, num=num_test, dtype=int)
-        test_cam_ids = set([all_cam_ids[i] for i in indices])
-        train_cam_ids = [cam_id for cam_id in all_cam_ids if cam_id not in test_cam_ids]
+        # Sort camera IDs to ensure consistent ordering
+        sorted_cam_ids = sorted(all_cam_ids)
+        
+        # First camera becomes test set
+        test_cam_ids = [sorted_cam_ids[0]]
+        
+        # All remaining cameras become training set  
+        train_cam_ids = sorted_cam_ids[1:]
 
         print(f"Train cameras: {train_cam_ids}")
-        print(f"Test cameras: {sorted(list(test_cam_ids))}")
+        print(f"Test cameras: {test_cam_ids}")
 
         return train_cam_ids, test_cam_ids
 
@@ -1265,7 +1266,7 @@ class UnifiedDyNeRFPreprocessor:
         build_metadata(train_cam_ids, train_frames, 'train')
         build_metadata(test_cam_ids, test_frames, 'test')
 
-    def run_unified_preprocessing(self, target_size=(640, 360), max_frames=150):
+    def run_unified_preprocessing(self, target_size=(640, 360), max_frames=300):
         """Run complete unified preprocessing with proper train/test split using dense point clouds"""
         print("Starting unified DyNeRF preprocessing with train/test split...")
 
@@ -1337,7 +1338,7 @@ def main():
     parser.add_argument("--data-dir", type=str, default=".")
     parser.add_argument("--seq", type=str, default="cut_roasted_beef")
     parser.add_argument("--output-dir", type=str, default="./processed_unified")
-    parser.add_argument("--max-frames", type=int, default=150)
+    parser.add_argument("--max-frames", type=int, default=300)
     parser.add_argument("--width", type=int, default=640, help="Target image width")
     parser.add_argument("--height", type=int, default=360, help="Target image height")
     parser.add_argument(
