@@ -1,16 +1,36 @@
-from argparse import ArgumentParser
-import torch
-import os
-import json
 import copy
-import numpy as np
-from PIL import Image
+import json
+import os
+import time
+from argparse import ArgumentParser
 from random import randint
-from tqdm import tqdm
+
+import numpy as np
+import torch
 from diff_gaussian_rasterization import GaussianRasterizer as Renderer
-from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, weighted_l2_loss_v2, quat_mult, \
-    o3d_knn, params2rendervar, params2cpu, save_params
-from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
+from PIL import Image
+from tqdm import tqdm
+
+from external import (
+    build_rotation,
+    calc_psnr,
+    calc_ssim,
+    densify,
+    update_params_and_optimizer,
+)
+from helpers import (
+    l1_loss_v1,
+    l1_loss_v2,
+    o3d_knn,
+    params2cpu,
+    params2rendervar,
+    quat_mult,
+    save_params,
+    setup_camera,
+    weighted_l2_loss_v1,
+    weighted_l2_loss_v2,
+)
+
 
 def get_dataset(t, md, seq, data_dir):
     dataset = []
@@ -81,7 +101,13 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
 
     rendervar = params2rendervar(params)
     rendervar['means2D'].retain_grad()
+    
+    # Time the main image rendering
+    img_render_start = time.time()
     im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
+    variables['img_render_time'] = variables.get('img_render_time', 0.0) + (time.time() - img_render_start)
+    variables['img_render_count'] = variables.get('img_render_count', 0) + 1
+    
     curr_id = curr_data['id']
     im = torch.exp(params['cam_m'][curr_id])[:, None, None] * im + params['cam_c'][curr_id][:, None, None]
     losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
@@ -89,7 +115,12 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
 
     segrendervar = params2rendervar(params)
     segrendervar['colors_precomp'] = params['seg_colors']
+    
+    # Time the segmentation rendering
+    seg_render_start = time.time()
     seg, _, _, = Renderer(raster_settings=curr_data['cam'])(**segrendervar)
+    variables['seg_render_time'] = variables.get('seg_render_time', 0.0) + (time.time() - seg_render_start)
+    variables['seg_render_count'] = variables.get('seg_render_count', 0) + 1
     losses['seg'] = 0.8 * l1_loss_v1(seg, curr_data['seg']) + 0.2 * (1.0 - calc_ssim(seg, curr_data['seg']))
 
     if not is_initial_timestep:
@@ -174,13 +205,28 @@ def initialize_post_first_timestep(params, variables, optimizer, num_knn=20):
     return variables
 
 
-def report_progress(params, data, i, progress_bar, every_i=100):
+def report_progress(params, data, i, progress_bar, variables, every_i=100):
     if i % every_i == 0:
+        # Time the progress rendering (evaluation)
+        render_start = time.time()
         im, _, _, = Renderer(raster_settings=data['cam'])(**params2rendervar(params))
+        variables['eval_render_time'] = variables.get('eval_render_time', 0.0) + (time.time() - render_start)
+        variables['eval_render_count'] = variables.get('eval_render_count', 0) + 1
+        
         curr_id = data['id']
         im = torch.exp(params['cam_m'][curr_id])[:, None, None] * im + params['cam_c'][curr_id][:, None, None]
         psnr = calc_psnr(im, data['im']).mean()
-        progress_bar.set_postfix({"train img 0 PSNR": f"{psnr:.{7}f}"})
+        
+        # Calculate average render times
+        avg_img_render_time = variables.get('img_render_time', 0.0) / max(variables.get('img_render_count', 1), 1)
+        avg_seg_render_time = variables.get('seg_render_time', 0.0) / max(variables.get('seg_render_count', 1), 1)
+        avg_eval_render_time = variables.get('eval_render_time', 0.0) / max(variables.get('eval_render_count', 1), 1)
+        progress_bar.set_postfix({
+            "train img 0 PSNR": f"{psnr:.{7}f}",
+            "img render (ms)": f"{avg_img_render_time * 1000:.2f}",
+            "seg render (ms)": f"{avg_seg_render_time * 1000:.2f}",
+            "eval render (ms)": f"{avg_eval_render_time * 1000:.2f}"
+        })
         progress_bar.update(every_i)
 
 
@@ -212,6 +258,13 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         dataset = get_dataset(t, md, seq, data_dir)
         todo_dataset = []
         is_initial_timestep = (t == 0)
+        # Reset render timing for each timestep
+        variables['img_render_time'] = 0.0
+        variables['img_render_count'] = 0
+        variables['seg_render_time'] = 0.0
+        variables['seg_render_count'] = 0
+        variables['eval_render_time'] = 0.0
+        variables['eval_render_count'] = 0
         if not is_initial_timestep:
             params, variables = initialize_per_timestep(params, variables, optimizer)
         num_iter_per_timestep = 10000 if is_initial_timestep else 2000
@@ -221,7 +274,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
             loss, variables = get_loss(params, curr_data, variables, is_initial_timestep)
             loss.backward()
             with torch.no_grad():
-                report_progress(params, dataset[0], i, progress_bar)
+                report_progress(params, dataset[0], i, progress_bar, variables)
                 if is_initial_timestep:
                     params, variables = densify(params, variables, optimizer, i)
                 optimizer.step()
