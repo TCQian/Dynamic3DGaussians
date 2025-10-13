@@ -253,7 +253,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     params, variables = initialize_params(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
-    for t in range(num_timesteps):
+    for t in range(100): # temporary run for 100 timesteps only
         print(f"Training timestep {t}")
         dataset = get_dataset(t, md, seq, data_dir)
         todo_dataset = []
