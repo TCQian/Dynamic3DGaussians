@@ -96,7 +96,7 @@ def initialize_optimizer(params, variables):
     return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
 
-def get_loss(params, curr_data, variables, is_initial_timestep):
+def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, timestep=0, seq="", exp="", output_dir=""):
     losses = {}
 
     rendervar = params2rendervar(params)
@@ -112,6 +112,29 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
     im = torch.exp(params['cam_m'][curr_id])[:, None, None] * im + params['cam_c'][curr_id][:, None, None]
     losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
     variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
+    
+    # Save images on first iteration of non-initial timesteps
+    if not is_initial_timestep and iteration == 0 and seq and exp and output_dir:
+        save_images_dir = f"{output_dir}/{exp}/{seq}/first_iter_images"
+        os.makedirs(save_images_dir, exist_ok=True)
+        
+        # Convert tensors to numpy arrays and save as images
+        rendered_img = im.detach().cpu().permute(1, 2, 0).numpy()
+        rendered_img = np.clip(rendered_img, 0, 1)
+        rendered_img = (rendered_img * 255).astype(np.uint8)
+        
+        gt_img = curr_data['im'].detach().cpu().permute(1, 2, 0).numpy()
+        gt_img = np.clip(gt_img, 0, 1)
+        gt_img = (gt_img * 255).astype(np.uint8)
+        
+        # Save images with descriptive names
+        rendered_path = f"{save_images_dir}/timestep_{timestep:03d}_cam_{curr_id:02d}_rendered.png"
+        gt_path = f"{save_images_dir}/timestep_{timestep:03d}_cam_{curr_id:02d}_gt.png"
+        
+        Image.fromarray(rendered_img).save(rendered_path)
+        Image.fromarray(gt_img).save(gt_path)
+        
+        print(f"Saved first iteration images for timestep {timestep}, camera {curr_id}")
 
     segrendervar = params2rendervar(params)
     segrendervar['colors_precomp'] = params['seg_colors']
@@ -271,7 +294,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
-            loss, variables = get_loss(params, curr_data, variables, is_initial_timestep)
+            loss, variables = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir)
             loss.backward()
             with torch.no_grad():
                 report_progress(params, dataset[0], i, progress_bar, variables)
