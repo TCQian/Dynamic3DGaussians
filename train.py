@@ -32,11 +32,17 @@ from helpers import (
 )
 
 
-def get_dataset(t, md, seq, data_dir):
+def get_dataset(t, md, seq, data_dir, dataset_type='cmu'):
     dataset = []
+    near = 1.0
+    far = 100
+    if dataset_type == 'dynerf':
+        near = 0.0
+        far = 1.0
+
     for c in range(len(md['fn'][t])):
         w, h, k, w2c = md['w'], md['h'], md['k'][t][c], md['w2c'][t][c]
-        cam = setup_camera(w, h, k, w2c, near=1.0, far=100)
+        cam = setup_camera(w, h, k, w2c, near=near, far=far)
         fn = md['fn'][t][c]
         im = np.array(copy.deepcopy(Image.open(f"{data_dir}/{seq}/ims/{fn}")))
         im = torch.tensor(im).float().cuda().permute(2, 0, 1) / 255
@@ -278,7 +284,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     output_params = []
     for t in range(100): # temporary run for 100 timesteps only
         print(f"Training timestep {t}")
-        dataset = get_dataset(t, md, seq, data_dir)
+        dataset = get_dataset(t, md, seq, data_dir, dataset_type)
         todo_dataset = []
         is_initial_timestep = (t == 0)
         # Reset render timing for each timestep
