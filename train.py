@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import random
 import time
 from argparse import ArgumentParser
 from random import randint
@@ -30,6 +31,18 @@ from helpers import (
     weighted_l2_loss_v1,
     weighted_l2_loss_v2,
 )
+
+
+def set_seed(seed):
+    """Set random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if using multi-GPU
+    # Make CUDA operations more deterministic (may impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def get_dataset(t, md, seq, data_dir, dataset_type='cmu'):
@@ -344,5 +357,15 @@ if __name__ == "__main__":
         choices=["cmu", "dynerf"],
         help="Type of dataset format: 'cmu' for the current format, 'dynerf' for DyNeRF format",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility (default: 42)",
+    )
     args = parser.parse_args()
+
+    set_seed(args.seed)
+    print(f"Random seed set to: {args.seed}")
+
     train(args.dataset, args.exp_name, args.data_dir, args.output_dir, args.dataset_type)
