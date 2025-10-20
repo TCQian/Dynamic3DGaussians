@@ -318,7 +318,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
 
         # Early stopping constants
         eval_every = 10
-        early_stop_patience_iters = 50
+        early_stop_patience_iters = 500
         early_stop_delta = 0.01  # PSNR must improve by at least this much
 
         # Track PSNR improvements
