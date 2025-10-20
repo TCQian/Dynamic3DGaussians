@@ -336,6 +336,8 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
             loss.backward()
             with torch.no_grad():
                 psnr = report_progress(params, eval_sample, i, progress_bar, variables, every_i=eval_every)
+                if is_initial_timestep:
+                    psnr = None # disable PSNR evaluation for initial timestep
                 if psnr is not None:
                     cur_psnr = psnr.item() if hasattr(psnr, 'item') else float(psnr)
                     # Improvement check
