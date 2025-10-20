@@ -273,7 +273,8 @@ def report_progress(params, data, i, progress_bar, variables, every_i=100):
             "eval render (ms)": f"{avg_eval_render_time * 1000:.2f}"
         })
         progress_bar.update(every_i)
-
+        return psnr
+    return None
 
 def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     if os.path.exists(f"{output_dir}/{exp}/{seq}"):
@@ -312,8 +313,19 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         variables['eval_render_count'] = 0
         if not is_initial_timestep:
             params, variables = initialize_per_timestep(params, variables, optimizer)
-        num_iter_per_timestep = 10000 if is_initial_timestep else 2000
+        num_iter_per_timestep = 10000 if is_initial_timestep else 10000
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
+
+        # Early stopping constants
+        eval_every = 10
+        early_stop_patience_iters = 50
+        early_stop_delta = 0.01  # PSNR must improve by at least this much
+
+        # Track PSNR improvements
+        best_psnr = -float('inf')
+        iters_since_best = 0
+        eval_sample = dataset[0]  # fixed evaluation sample for comparable PSNR
+
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
             loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir)
@@ -323,7 +335,22 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
 
             loss.backward()
             with torch.no_grad():
-                report_progress(params, dataset[0], i, progress_bar, variables)
+                psnr = report_progress(params, eval_sample, i, progress_bar, variables, every_i=eval_every)
+                if psnr is not None:
+                    cur_psnr = psnr.item() if hasattr(psnr, 'item') else float(psnr)
+                    # Improvement check
+                    if cur_psnr > best_psnr + early_stop_delta:
+                        best_psnr = cur_psnr
+                        iters_since_best = 0
+                    else:
+                        iters_since_best += eval_every
+                    # Early stopping if no sufficient improvement for patience
+                    if iters_since_best >= early_stop_patience_iters:
+                        print(f"Early stopping timestep {t} at iteration {i} | best PSNR={best_psnr:.3f}")
+                        remaining = num_iter_per_timestep - i - 1
+                        if remaining > 0:
+                            progress_bar.update(remaining)
+                        break
                 if is_initial_timestep:
                     params, variables = densify(params, variables, optimizer, i)
                 optimizer.step()
