@@ -62,7 +62,7 @@ def get_dataset(t, md, seq, data_dir, dataset_type='cmu'):
         seg = np.array(copy.deepcopy(Image.open(f"{data_dir}/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
         seg = torch.tensor(seg).float().cuda()
         seg_col = torch.stack((seg, torch.zeros_like(seg), 1 - seg))
-        dataset.append({'cam': cam, 'im': im, 'seg': seg_col, 'id': c})
+        dataset.append({'cam': cam, 'im': im, 'seg': seg_col, 'id': c, 'cam_id': fn.split('/')[0]})
     return dataset
 
 
@@ -127,14 +127,15 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
     variables['img_render_time'] = variables.get('img_render_time', 0.0) + (time.time() - img_render_start)
     variables['img_render_count'] = variables.get('img_render_count', 0) + 1
     
+    cam_id = int(curr_data['cam_id'])
     curr_id = curr_data['id']
     im = torch.exp(params['cam_m'][curr_id])[:, None, None] * im + params['cam_c'][curr_id][:, None, None]
     losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
     variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
     
-    # Save images on first iteration of non-initial timesteps
-    if not is_initial_timestep and iteration == 0 and seq and exp and output_dir:
-        save_images_dir = f"{output_dir}/{exp}/{seq}/first_iter_images"
+    # [TEMP] Save images for every iteration of non-initial timesteps
+    if not is_initial_timestep and seq and exp and output_dir and iteration % 100 == 0:
+        save_images_dir = f"{output_dir}/{exp}/{seq}/all_iter_images"
         os.makedirs(save_images_dir, exist_ok=True)
         
         # Convert tensors to numpy arrays and save as images
@@ -146,14 +147,14 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
         gt_img = np.clip(gt_img, 0, 1)
         gt_img = (gt_img * 255).astype(np.uint8)
         
-        # Save images with descriptive names
-        rendered_path = f"{save_images_dir}/timestep_{timestep:03d}_cam_{curr_id:02d}_rendered.png"
-        gt_path = f"{save_images_dir}/timestep_{timestep:03d}_cam_{curr_id:02d}_gt.png"
+        # Save images with descriptive names including iteration number
+        rendered_path = f"{save_images_dir}/timestep_{timestep:03d}_cam_{cam_id:02d}_iter_{iteration:05d}_rendered.png"
+        gt_path = f"{save_images_dir}/timestep_{timestep:03d}_cam_{cam_id:02d}_iter_{iteration:05d}_gt.png"
         
         Image.fromarray(rendered_img).save(rendered_path)
         Image.fromarray(gt_img).save(gt_path)
         
-        print(f"Saved first iteration images for timestep {timestep}, camera {curr_id}")
+        print(f"Saved images for timestep {timestep}, camera {cam_id}, iteration {iteration}")
 
     segrendervar = params2rendervar(params)
     segrendervar['colors_precomp'] = params['seg_colors']
@@ -198,7 +199,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
     seen = radius > 0
     variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen])
     variables['seen'] = seen
-    return loss, variables
+    return loss, variables, losses
 
 
 def initialize_per_timestep(params, variables, optimizer):
@@ -295,7 +296,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     params, variables = initialize_params(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
-    for t in range(100): # temporary run for 100 timesteps only
+    for t in range(5): # [TEMP] run for 5 timesteps only
         print(f"Training timestep {t}")
         dataset = get_dataset(t, md, seq, data_dir, dataset_type)
         todo_dataset = []
@@ -313,7 +314,11 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
-            loss, variables = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir)
+            loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir)
+
+            # [TEMP] Print losses
+            print(" | ".join([f"iteration {i}", f"camera_id {curr_data['cam_id']}", f"loss: {loss.item():.6f}"] + [f"{k}: {v.item():.6f}" for k, v in losses.items()]))
+
             loss.backward()
             with torch.no_grad():
                 report_progress(params, dataset[0], i, progress_bar, variables)

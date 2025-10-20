@@ -75,8 +75,8 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
     width, height = meta["w"], meta["h"]
     views = []
     for t, (fns, ks, w2cs) in enumerate(zip(meta["fn"], meta["k"], meta["w2c"])):
-        if t >= 100:
-            break # temporary run for 100 timesteps only
+        if t >= 5:
+            break # [TEMP] run for 5 timesteps only
         for c, fn in enumerate(fns):
             views.append(
                 {
