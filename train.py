@@ -190,6 +190,8 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
         bg_pts = rendervar['means3D'][~is_fg]
         bg_rot = rendervar['rotations'][~is_fg]
         losses['bg'] = l1_loss_v2(bg_pts, variables["init_bg_pts"]) + l1_loss_v2(bg_rot, variables["init_bg_rot"])
+        if torch.isnan(losses['bg']).any():
+            losses['bg'] = torch.tensor(0.0, device=losses['bg'].device, dtype=losses['bg'].dtype)
 
         losses['soft_col_cons'] = l1_loss_v2(params['rgb_colors'], variables["prev_col"])
 
