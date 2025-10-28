@@ -56,7 +56,7 @@ def tensor_to_pil(im: torch.Tensor) -> Image.Image:
     return Image.fromarray(arr)
 
 
-def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
+def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path, dataset_type: str):
     """
     For each (timestep, view) in test_meta.json:
       1. grab scene[t]
@@ -71,6 +71,10 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
     meta_path = data_dir / seq / "test_meta.json"
     with open(meta_path, "r") as f:
         meta = json.load(f)
+
+    near, far = 1.0, 100.0
+    if dataset_type == "dynerf":
+        near, far = 0.0, 1.0
 
     width, height = meta["w"], meta["h"]
     views = []
@@ -102,7 +106,7 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
         data_vars = scene[t]  # pick the right timestep’s dict
 
         # build camera & render
-        cam = setup_camera(width, height, view["k"], view["w2c"], near=1.0, far=100)
+        cam = setup_camera(width, height, view["k"], view["w2c"], near=near, far=far)
         with torch.no_grad():
             im, _, _ = Renderer(raster_settings=cam)(**data_vars)
 
@@ -138,7 +142,8 @@ if __name__ == "__main__":
         default="basketball",
         help="Name of the dataset to use for training (e.g., basketball, boxes, etc.)",
     )
+    parser.add_argument("--dataset-type", type=str, default="cmu")
     args = parser.parse_args()
 
     print(f"\n=== Sequence: {args.dataset} ===")
-    render_and_save(args.dataset, args.exp_name, args.output_dir, args.data_dir)
+    render_and_save(args.dataset, args.exp_name, args.output_dir, args.data_dir, args.dataset_type)
