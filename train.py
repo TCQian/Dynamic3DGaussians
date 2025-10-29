@@ -185,7 +185,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
         curr_offset_mag = torch.sqrt((curr_offset ** 2).sum(-1) + 1e-20)
         losses['iso'] = weighted_l2_loss_v1(curr_offset_mag, variables["neighbor_dist"], variables["neighbor_weight"])
 
-        losses['floor'] = torch.clamp(-fg_pts[:, 1], min=0).mean()
+        losses['floor'] = torch.clamp(fg_pts[:, 1], min=0).mean()
 
         bg_pts = rendervar['means3D'][~is_fg]
         bg_rot = rendervar['rotations'][~is_fg]
@@ -195,7 +195,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
 
         losses['soft_col_cons'] = l1_loss_v2(params['rgb_colors'], variables["prev_col"])
 
-    loss_weights = {'im': 1.0, 'seg': 3.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 2.0, 'bg': 0,
+    loss_weights = {'im': 1.0, 'seg': 3.0, 'rigid': 4.0, 'rot': 4.0, 'iso': 2.0, 'floor': 2.0, 'bg': 20.0,
                     'soft_col_cons': 0.01}
     loss = sum([loss_weights[k] * v for k, v in losses.items()])
     seen = radius > 0
@@ -335,7 +335,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
 
             loss.backward()
             with torch.no_grad():
-                psnr = report_progress(params, eval_sample, i, progress_bar, variables, every_i=eval_every)
+                psnr = report_progress(params, dataset[0], i, progress_bar, variables, every_i=eval_every)
                 if is_initial_timestep:
                     psnr = None # disable PSNR evaluation for initial timestep
                 if False and psnr is not None: # [TEMP] disable early stopping
