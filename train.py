@@ -322,7 +322,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         variables['eval_render_count'] = 0
         if not is_initial_timestep:
             params, variables = initialize_per_timestep(params, variables, optimizer)
-        num_iter_per_timestep = 10000 if is_initial_timestep else 2000
+        num_iter_per_timestep = 10000 # if is_initial_timestep else 2000 [TEMP]
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
 
         # Early stopping constants
@@ -335,7 +335,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         iters_since_best = 0
         eval_sample = dataset[0]  # fixed evaluation sample for comparable PSNR
 
-        for i in range(num_iter_per_timestep):
+        for i in range(3): # [TEMP] only train the first 3 iterations
             curr_data = get_batch(todo_dataset, dataset)
             loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir, dataset_type)
 
@@ -347,7 +347,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
                 psnr = report_progress(params, dataset[0], i, progress_bar, variables, every_i=eval_every)
                 if is_initial_timestep:
                     psnr = None # disable PSNR evaluation for initial timestep
-                if False and psnr is not None: # [TEMP] disable early stopping
+                if psnr is not None: # [TEMP] disable early stopping
                     cur_psnr = psnr.item() if hasattr(psnr, 'item') else float(psnr)
                     # Improvement check
                     if cur_psnr > best_psnr + early_stop_delta:
