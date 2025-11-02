@@ -308,7 +308,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     params, variables = initialize_params(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
-    for t in range(num_timesteps):
+    for t in range(3): # [TEMP] only train the first 3 timesteps
         print(f"Training timestep {t}")
         dataset = get_dataset(t, md, seq, data_dir, dataset_type)
         todo_dataset = []
@@ -335,7 +335,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         iters_since_best = 0
         eval_sample = dataset[0]  # fixed evaluation sample for comparable PSNR
 
-        for i in range(3): # [TEMP] only train the first 3 iterations
+        for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
             loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir, dataset_type)
 
