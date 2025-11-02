@@ -308,7 +308,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     params, variables = initialize_params(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
-    for t in range(3): # [TEMP] only train the first 3 timesteps
+    for t in range(5): # [TEMP] only train the first 5 timesteps
         print(f"Training timestep {t}")
         dataset = get_dataset(t, md, seq, data_dir, dataset_type)
         todo_dataset = []
