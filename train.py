@@ -120,7 +120,7 @@ def initialize_optimizer(params, variables):
     return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
 
-def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, timestep=0, seq="", exp="", output_dir=""):
+def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, timestep=0, seq="", exp="", output_dir="", dataset_type="cmu"):
     losses = {}
 
     rendervar = params2rendervar(params)
@@ -190,7 +190,8 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
         curr_offset_mag = torch.sqrt((curr_offset ** 2).sum(-1) + 1e-20)
         losses['iso'] = weighted_l2_loss_v1(curr_offset_mag, variables["neighbor_dist"], variables["neighbor_weight"])
 
-        losses['floor'] = torch.clamp(fg_pts[:, 1], min=0).mean()
+        ground_level = 0.0 if dataset_type == "cmu" else 14.5
+        losses['floor'] = torch.clamp(fg_pts[:, 1], min=ground_level).mean()
         # Debug: Check y-coordinates during training
         if iteration % 100 == 0:
             print(f"  Floor loss debug: fg y min={fg_pts[:, 1].min().item():.3f}, max={fg_pts[:, 1].max().item():.3f}, mean={fg_pts[:, 1].mean().item():.3f}, <0: {(fg_pts[:, 1] < 0).sum().item()}/{len(fg_pts)}, >0: {(fg_pts[:, 1] > 0).sum().item()}/{len(fg_pts)}, loss={losses['floor'].item():.6f}")
@@ -336,7 +337,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
 
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
-            loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir)
+            loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir, dataset_type)
 
             # [TEMP] Print losses
             print(" | ".join([f"iteration {i}", f"camera_id {curr_data['cam_id']}", f"loss: {loss.item():.6f}"] + [f"{k}: {v.item():.6f}" for k, v in losses.items()]))
