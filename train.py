@@ -91,6 +91,11 @@ def initialize_params(seq, md, data_dir):
     }
     params = {k: torch.nn.Parameter(torch.tensor(v).cuda().float().contiguous().requires_grad_(True)) for k, v in
               params.items()}
+    # Debug: Check initial foreground y-coordinates
+    is_fg_init = params['seg_colors'][:, 0] > 0.5
+    if is_fg_init.any():
+        fg_y_init = params['means3D'][is_fg_init, 1]
+        print(f"Initial fg y-coords: min={fg_y_init.min().item():.3f}, max={fg_y_init.max().item():.3f}, mean={fg_y_init.mean().item():.3f}, <0: {(fg_y_init < 0).sum().item()}/{len(fg_y_init)}, >0: {(fg_y_init > 0).sum().item()}/{len(fg_y_init)}")
     cam_centers = np.linalg.inv(md['w2c'][0])[:, :3, 3]  # Get scene radius
     scene_radius = 1.1 * np.max(np.linalg.norm(cam_centers - np.mean(cam_centers, 0)[None], axis=-1))
     variables = {'max_2D_radius': torch.zeros(params['means3D'].shape[0]).cuda().float(),
@@ -186,6 +191,9 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
         losses['iso'] = weighted_l2_loss_v1(curr_offset_mag, variables["neighbor_dist"], variables["neighbor_weight"])
 
         losses['floor'] = torch.clamp(fg_pts[:, 1], min=0).mean()
+        # Debug: Check y-coordinates during training
+        if iteration % 100 == 0:
+            print(f"  Floor loss debug: fg y min={fg_pts[:, 1].min().item():.3f}, max={fg_pts[:, 1].max().item():.3f}, mean={fg_pts[:, 1].mean().item():.3f}, <0: {(fg_pts[:, 1] < 0).sum().item()}/{len(fg_pts)}, >0: {(fg_pts[:, 1] > 0).sum().item()}/{len(fg_pts)}, loss={losses['floor'].item():.6f}")
 
         bg_pts = rendervar['means3D'][~is_fg]
         bg_rot = rendervar['rotations'][~is_fg]
