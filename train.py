@@ -190,8 +190,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
         curr_offset_mag = torch.sqrt((curr_offset ** 2).sum(-1) + 1e-20)
         losses['iso'] = weighted_l2_loss_v1(curr_offset_mag, variables["neighbor_dist"], variables["neighbor_weight"])
 
-        ground_level = 0.0 if dataset_type == "cmu" else 14.5
-        losses['floor'] = torch.clamp(fg_pts[:, 1], min=ground_level).mean()
+        losses['floor'] = torch.clamp(fg_pts[:, 1], min=0).mean()
         # Debug: Check y-coordinates during training
         if iteration % 100 == 0:
             print(f"  Floor loss debug: fg y min={fg_pts[:, 1].min().item():.3f}, max={fg_pts[:, 1].max().item():.3f}, mean={fg_pts[:, 1].mean().item():.3f}, <0: {(fg_pts[:, 1] < 0).sum().item()}/{len(fg_pts)}, >0: {(fg_pts[:, 1] > 0).sum().item()}/{len(fg_pts)}, loss={losses['floor'].item():.6f}")
