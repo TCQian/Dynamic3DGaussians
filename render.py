@@ -28,10 +28,20 @@ def load_scene_data(seq: str, exp: str, out_dir: Path) -> list[dict]:
     T = params["means3D"].shape[0]
     scene = []
     for t in range(T):
+        # Get y-coordinates for this timestep
+        y_coords = params["means3D"][t][:, 1]
+        
+        # Create colors based on y-coordinate
+        colors = params["rgb_colors"][t].clone()
+        
+        # Color points below y=0 (or above if y increases downward) with blue
+        below_floor_mask = y_coords > 0  # Adjust this condition based on your coordinate system
+        colors[below_floor_mask] = torch.tensor([0.0, 0.0, 1.0], device=colors.device)
+        
         scene.append(
             {
                 "means3D": params["means3D"][t],
-                "colors_precomp": params["rgb_colors"][t],
+                "colors_precomp": colors,  # Use modified colors
                 "rotations": torch.nn.functional.normalize(
                     params["unnorm_rotations"][t]
                 ),
