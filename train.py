@@ -60,8 +60,6 @@ def get_dataset(t, md, seq, data_dir, dataset_type='cmu'):
         im = np.array(copy.deepcopy(Image.open(f"{data_dir}/{seq}/ims/{fn}")))
         im = torch.tensor(im).float().cuda().permute(2, 0, 1) / 255
         seg = np.array(copy.deepcopy(Image.open(f"{data_dir}/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
-        if seg.max() > 1:
-            seg = seg / 255.0
         seg = torch.tensor(seg).float().cuda()
         seg_col = torch.stack((seg, torch.zeros_like(seg), 1 - seg))
         dataset.append({'cam': cam, 'im': im, 'seg': seg_col, 'id': c, 'cam_id': fn.split('/')[0]})
@@ -193,7 +191,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
         losses['iso'] = weighted_l2_loss_v1(curr_offset_mag, variables["neighbor_dist"], variables["neighbor_weight"])
 
         ground_level = 0.0 if dataset_type == "cmu" else 14.5
-        losses['floor'] = (torch.clamp(fg_pts[:, 1], min=ground_level) - ground_level).mean()
+        losses['floor'] = torch.clamp(fg_pts[:, 1], min=ground_level).mean()
         # Debug: Check y-coordinates during training
         if iteration % 100 == 0:
             print(f"  Floor loss debug: fg y min={fg_pts[:, 1].min().item():.3f}, max={fg_pts[:, 1].max().item():.3f}, mean={fg_pts[:, 1].mean().item():.3f}, <0: {(fg_pts[:, 1] < 0).sum().item()}/{len(fg_pts)}, >0: {(fg_pts[:, 1] > 0).sum().item()}/{len(fg_pts)}, loss={losses['floor'].item():.6f}")
