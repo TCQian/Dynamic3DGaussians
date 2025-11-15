@@ -91,11 +91,6 @@ def initialize_params(seq, md, data_dir):
     }
     params = {k: torch.nn.Parameter(torch.tensor(v).cuda().float().contiguous().requires_grad_(True)) for k, v in
               params.items()}
-    # Debug: Check initial foreground y-coordinates
-    is_fg_init = params['seg_colors'][:, 0] > 0.5
-    if is_fg_init.any():
-        fg_y_init = params['means3D'][is_fg_init, 1]
-        print(f"Initial fg y-coords: min={fg_y_init.min().item():.3f}, max={fg_y_init.max().item():.3f}, mean={fg_y_init.mean().item():.3f}, <0: {(fg_y_init < 0).sum().item()}/{len(fg_y_init)}, >0: {(fg_y_init > 0).sum().item()}/{len(fg_y_init)}")
     cam_centers = np.linalg.inv(md['w2c'][0])[:, :3, 3]  # Get scene radius
     scene_radius = 1.1 * np.max(np.linalg.norm(cam_centers - np.mean(cam_centers, 0)[None], axis=-1))
     variables = {'max_2D_radius': torch.zeros(params['means3D'].shape[0]).cuda().float(),
@@ -137,29 +132,6 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
     im = torch.exp(params['cam_m'][curr_id])[:, None, None] * im + params['cam_c'][curr_id][:, None, None]
     losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
     variables['means2D'] = rendervar['means2D']  # Gradient only accum from colour render for densification
-    
-    # [TEMP] Save images for every iteration of non-initial timesteps
-    if not is_initial_timestep and seq and exp and output_dir and iteration % 100 == 0:
-        save_images_dir = f"{output_dir}/{exp}/{seq}/all_iter_images"
-        os.makedirs(save_images_dir, exist_ok=True)
-        
-        # Convert tensors to numpy arrays and save as images
-        rendered_img = im.detach().cpu().permute(1, 2, 0).numpy()
-        rendered_img = np.clip(rendered_img, 0, 1)
-        rendered_img = (rendered_img * 255).astype(np.uint8)
-        
-        gt_img = curr_data['im'].detach().cpu().permute(1, 2, 0).numpy()
-        gt_img = np.clip(gt_img, 0, 1)
-        gt_img = (gt_img * 255).astype(np.uint8)
-        
-        # Save images with descriptive names including iteration number
-        rendered_path = f"{save_images_dir}/timestep_{timestep:03d}_cam_{cam_id:02d}_iter_{iteration:05d}_rendered.png"
-        gt_path = f"{save_images_dir}/timestep_{timestep:03d}_cam_{cam_id:02d}_iter_{iteration:05d}_gt.png"
-        
-        Image.fromarray(rendered_img).save(rendered_path)
-        Image.fromarray(gt_img).save(gt_path)
-        
-        print(f"Saved images for timestep {timestep}, camera {cam_id}, iteration {iteration}")
 
     segrendervar = params2rendervar(params)
     segrendervar['colors_precomp'] = params['seg_colors']
@@ -190,16 +162,13 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
         curr_offset_mag = torch.sqrt((curr_offset ** 2).sum(-1) + 1e-20)
         losses['iso'] = weighted_l2_loss_v1(curr_offset_mag, variables["neighbor_dist"], variables["neighbor_weight"])
 
-        losses['floor'] = torch.clamp(fg_pts[:, 1], min=0).mean()
-        # Debug: Check y-coordinates during training
-        if iteration % 100 == 0:
-            print(f"  Floor loss debug: fg y min={fg_pts[:, 1].min().item():.3f}, max={fg_pts[:, 1].max().item():.3f}, mean={fg_pts[:, 1].mean().item():.3f}, <0: {(fg_pts[:, 1] < 0).sum().item()}/{len(fg_pts)}, >0: {(fg_pts[:, 1] > 0).sum().item()}/{len(fg_pts)}, loss={losses['floor'].item():.6f}")
+        # losses['floor'] = torch.clamp(fg_pts[:, 1], min=0).mean() # we disable floor loss
 
         bg_pts = rendervar['means3D'][~is_fg]
         bg_rot = rendervar['rotations'][~is_fg]
         losses['bg'] = l1_loss_v2(bg_pts, variables["init_bg_pts"]) + l1_loss_v2(bg_rot, variables["init_bg_rot"])
         if torch.isnan(losses['bg']).any():
-            losses['bg'] = torch.tensor(0.0, device=losses['bg'].device, dtype=losses['bg'].dtype)
+            losses['bg'] = torch.tensor(0.0, device=losses['bg'].device, dtype=losses['bg'].dtype) # bg loss handling in case of nan due to mask is all foreground
 
         losses['soft_col_cons'] = l1_loss_v2(params['rgb_colors'], variables["prev_col"])
 
@@ -307,7 +276,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     params, variables = initialize_params(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
-    for t in range(5): # [TEMP] only train the first 5 timesteps
+    for t in range(num_timesteps):
         print(f"Training timestep {t}")
         dataset = get_dataset(t, md, seq, data_dir, dataset_type)
         todo_dataset = []
@@ -332,13 +301,12 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         # Track PSNR improvements
         best_psnr = -float('inf')
         iters_since_best = 0
-        eval_sample = dataset[0]  # fixed evaluation sample for comparable PSNR
 
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
             loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir, dataset_type)
 
-            # [TEMP] Print losses
+            # print losses
             print(" | ".join([f"iteration {i}", f"camera_id {curr_data['cam_id']}", f"loss: {loss.item():.6f}"] + [f"{k}: {v.item():.6f}" for k, v in losses.items()]))
 
             loss.backward()
@@ -346,7 +314,7 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
                 psnr = report_progress(params, dataset[0], i, progress_bar, variables, every_i=eval_every)
                 if is_initial_timestep:
                     psnr = None # disable PSNR evaluation for initial timestep
-                if psnr is not None: # [TEMP] disable early stopping
+                if False and psnr: # [Switch] update condition to enable early stopping
                     cur_psnr = psnr.item() if hasattr(psnr, 'item') else float(psnr)
                     # Improvement check
                     if cur_psnr > best_psnr + early_stop_delta:
