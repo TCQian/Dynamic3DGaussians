@@ -1,36 +1,17 @@
-import copy
-import json
-import os
-import random
-import time
 from argparse import ArgumentParser
-from random import randint
-
-import numpy as np
 import torch
-from diff_gaussian_rasterization import GaussianRasterizer as Renderer
+import os
+import json
+import copy
+import random
+import numpy as np
 from PIL import Image
+from random import randint
 from tqdm import tqdm
-
-from external import (
-    build_rotation,
-    calc_psnr,
-    calc_ssim,
-    densify,
-    update_params_and_optimizer,
-)
-from helpers import (
-    l1_loss_v1,
-    l1_loss_v2,
-    o3d_knn,
-    params2cpu,
-    params2rendervar,
-    quat_mult,
-    save_params,
-    setup_camera,
-    weighted_l2_loss_v1,
-    weighted_l2_loss_v2,
-)
+from diff_gaussian_rasterization import GaussianRasterizer as Renderer
+from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, weighted_l2_loss_v2, quat_mult, \
+    o3d_knn, params2rendervar, params2cpu, save_params
+from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
 
 
 def set_seed(seed):
@@ -62,7 +43,7 @@ def get_dataset(t, md, seq, data_dir, dataset_type='cmu'):
         seg = np.array(copy.deepcopy(Image.open(f"{data_dir}/{seq}/seg/{fn.replace('.jpg', '.png')}"))).astype(np.float32)
         seg = torch.tensor(seg).float().cuda()
         seg_col = torch.stack((seg, torch.zeros_like(seg), 1 - seg))
-        dataset.append({'cam': cam, 'im': im, 'seg': seg_col, 'id': c, 'cam_id': fn.split('/')[0]})
+        dataset.append({'cam': cam, 'im': im, 'seg': seg_col, 'id': c})
     return dataset
 
 
@@ -115,19 +96,12 @@ def initialize_optimizer(params, variables):
     return torch.optim.Adam(param_groups, lr=0.0, eps=1e-15)
 
 
-def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, timestep=0, seq="", exp="", output_dir="", dataset_type="cmu"):
+def get_loss(params, curr_data, variables, is_initial_timestep):
     losses = {}
 
     rendervar = params2rendervar(params)
     rendervar['means2D'].retain_grad()
-    
-    # Time the main image rendering
-    img_render_start = time.time()
     im, radius, _, = Renderer(raster_settings=curr_data['cam'])(**rendervar)
-    variables['img_render_time'] = variables.get('img_render_time', 0.0) + (time.time() - img_render_start)
-    variables['img_render_count'] = variables.get('img_render_count', 0) + 1
-    
-    cam_id = int(curr_data['cam_id'])
     curr_id = curr_data['id']
     im = torch.exp(params['cam_m'][curr_id])[:, None, None] * im + params['cam_c'][curr_id][:, None, None]
     losses['im'] = 0.8 * l1_loss_v1(im, curr_data['im']) + 0.2 * (1.0 - calc_ssim(im, curr_data['im']))
@@ -135,12 +109,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
 
     segrendervar = params2rendervar(params)
     segrendervar['colors_precomp'] = params['seg_colors']
-
-    # Time the segmentation rendering
-    seg_render_start = time.time()
     seg, _, _, = Renderer(raster_settings=curr_data['cam'])(**segrendervar)
-    variables['seg_render_time'] = variables.get('seg_render_time', 0.0) + (time.time() - seg_render_start)
-    variables['seg_render_count'] = variables.get('seg_render_count', 0) + 1
     losses['seg'] = 0.8 * l1_loss_v1(seg, curr_data['seg']) + 0.2 * (1.0 - calc_ssim(seg, curr_data['seg']))
 
     if not is_initial_timestep:
@@ -178,7 +147,7 @@ def get_loss(params, curr_data, variables, is_initial_timestep, iteration=0, tim
     seen = radius > 0
     variables['max_2D_radius'][seen] = torch.max(radius[seen], variables['max_2D_radius'][seen])
     variables['seen'] = seen
-    return loss, variables, losses
+    return loss, variables
 
 
 def initialize_per_timestep(params, variables, optimizer):
@@ -227,31 +196,15 @@ def initialize_post_first_timestep(params, variables, optimizer, num_knn=20):
     return variables
 
 
-def report_progress(params, data, i, progress_bar, variables, every_i=100):
+def report_progress(params, data, i, progress_bar, every_i=100):
     if i % every_i == 0:
-        # Time the progress rendering (evaluation)
-        render_start = time.time()
         im, _, _, = Renderer(raster_settings=data['cam'])(**params2rendervar(params))
-        variables['eval_render_time'] = variables.get('eval_render_time', 0.0) + (time.time() - render_start)
-        variables['eval_render_count'] = variables.get('eval_render_count', 0) + 1
-        
         curr_id = data['id']
         im = torch.exp(params['cam_m'][curr_id])[:, None, None] * im + params['cam_c'][curr_id][:, None, None]
         psnr = calc_psnr(im, data['im']).mean()
-        
-        # Calculate average render times
-        avg_img_render_time = variables.get('img_render_time', 0.0) / max(variables.get('img_render_count', 1), 1)
-        avg_seg_render_time = variables.get('seg_render_time', 0.0) / max(variables.get('seg_render_count', 1), 1)
-        avg_eval_render_time = variables.get('eval_render_time', 0.0) / max(variables.get('eval_render_count', 1), 1)
-        progress_bar.set_postfix({
-            "train img 0 PSNR": f"{psnr:.{7}f}",
-            "img render (ms)": f"{avg_img_render_time * 1000:.2f}",
-            "seg render (ms)": f"{avg_seg_render_time * 1000:.2f}",
-            "eval render (ms)": f"{avg_eval_render_time * 1000:.2f}"
-        })
+        progress_bar.set_postfix({"train img 0 PSNR": f"{psnr:.{7}f}"})
         progress_bar.update(every_i)
-        return psnr
-    return None
+
 
 def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     if os.path.exists(f"{output_dir}/{exp}/{seq}"):
@@ -277,58 +230,19 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     optimizer = initialize_optimizer(params, variables)
     output_params = []
     for t in range(num_timesteps):
-        print(f"Training timestep {t}")
         dataset = get_dataset(t, md, seq, data_dir, dataset_type)
         todo_dataset = []
         is_initial_timestep = (t == 0)
-        # Reset render timing for each timestep
-        variables['img_render_time'] = 0.0
-        variables['img_render_count'] = 0
-        variables['seg_render_time'] = 0.0
-        variables['seg_render_count'] = 0
-        variables['eval_render_time'] = 0.0
-        variables['eval_render_count'] = 0
         if not is_initial_timestep:
             params, variables = initialize_per_timestep(params, variables, optimizer)
-        num_iter_per_timestep = 10000 # if is_initial_timestep else 2000 [TEMP]
+        num_iter_per_timestep = 10000 if is_initial_timestep else 2000
         progress_bar = tqdm(range(num_iter_per_timestep), desc=f"timestep {t}")
-
-        # Early stopping constants
-        eval_every = 10
-        early_stop_patience_iters = 500
-        early_stop_delta = 0.01  # PSNR must improve by at least this much
-
-        # Track PSNR improvements
-        best_psnr = -float('inf')
-        iters_since_best = 0
-
         for i in range(num_iter_per_timestep):
             curr_data = get_batch(todo_dataset, dataset)
-            loss, variables, losses = get_loss(params, curr_data, variables, is_initial_timestep, i, t, seq, exp, output_dir, dataset_type)
-
-            # print losses
-            print(" | ".join([f"iteration {i}", f"camera_id {curr_data['cam_id']}", f"loss: {loss.item():.6f}"] + [f"{k}: {v.item():.6f}" for k, v in losses.items()]))
-
+            loss, variables = get_loss(params, curr_data, variables, is_initial_timestep)
             loss.backward()
             with torch.no_grad():
-                psnr = report_progress(params, dataset[0], i, progress_bar, variables, every_i=eval_every)
-                if is_initial_timestep:
-                    psnr = None # disable PSNR evaluation for initial timestep
-                if False and psnr: # [Switch] update condition to enable early stopping
-                    cur_psnr = psnr.item() if hasattr(psnr, 'item') else float(psnr)
-                    # Improvement check
-                    if cur_psnr > best_psnr + early_stop_delta:
-                        best_psnr = cur_psnr
-                        iters_since_best = 0
-                    else:
-                        iters_since_best += eval_every
-                    # Early stopping if no sufficient improvement for patience
-                    if iters_since_best >= early_stop_patience_iters:
-                        print(f"Early stopping timestep {t} at iteration {i} | best PSNR={best_psnr:.3f}")
-                        remaining = num_iter_per_timestep - i - 1
-                        if remaining > 0:
-                            progress_bar.update(remaining)
-                        break
+                report_progress(params, dataset[0], i, progress_bar)
                 if is_initial_timestep:
                     params, variables = densify(params, variables, optimizer, i)
                 optimizer.step()
@@ -337,10 +251,6 @@ def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
         output_params.append(params2cpu(params, is_initial_timestep))
         if is_initial_timestep:
             variables = initialize_post_first_timestep(params, variables, optimizer)
-
-        if t > 0 and t % 200 == 0:
-            save_params(output_params, seq, exp, output_dir)
-
     save_params(output_params, seq, exp, output_dir)
 
 
