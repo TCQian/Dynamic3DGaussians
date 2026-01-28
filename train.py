@@ -3,6 +3,7 @@ import torch
 import os
 import json
 import copy
+import random
 import numpy as np
 from PIL import Image
 from random import randint
@@ -13,11 +14,29 @@ from helpers import setup_camera, l1_loss_v1, l1_loss_v2, weighted_l2_loss_v1, w
 from external import calc_ssim, calc_psnr, build_rotation, densify, update_params_and_optimizer
 
 
-def get_dataset(t, md, seq, data_dir):
+def set_seed(seed):
+    """Set random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if using multi-GPU
+    # Make CUDA operations more deterministic (may impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+def get_dataset(t, md, seq, data_dir, dataset_type='cmu'):
     dataset = []
+    near = 1.0
+    far = 100
+    if dataset_type == 'dynerf':
+        near = 0.0
+        far = 1.0
+
     for c in range(len(md['fn'][t])):
         w, h, k, w2c = md['w'], md['h'], md['k'][t][c], md['w2c'][t][c]
-        cam = setup_camera(w, h, k, w2c, near=1.0, far=100)
+        cam = setup_camera(w, h, k, w2c, near=near, far=far)
         fn = md['fn'][t][c]
         im = np.array(copy.deepcopy(Image.open(f"{data_dir}/{seq}/ims/{fn}")))
         im = torch.tensor(im).float().cuda().permute(2, 0, 1) / 255
@@ -112,11 +131,13 @@ def get_loss(params, curr_data, variables, is_initial_timestep):
         curr_offset_mag = torch.sqrt((curr_offset ** 2).sum(-1) + 1e-20)
         losses['iso'] = weighted_l2_loss_v1(curr_offset_mag, variables["neighbor_dist"], variables["neighbor_weight"])
 
-        losses['floor'] = torch.clamp(fg_pts[:, 1], min=0).mean()
+        # losses['floor'] = torch.clamp(fg_pts[:, 1], min=0).mean() # we disable floor loss
 
         bg_pts = rendervar['means3D'][~is_fg]
         bg_rot = rendervar['rotations'][~is_fg]
         losses['bg'] = l1_loss_v2(bg_pts, variables["init_bg_pts"]) + l1_loss_v2(bg_rot, variables["init_bg_rot"])
+        if torch.isnan(losses['bg']).any():
+            losses['bg'] = torch.tensor(0.0, device=losses['bg'].device, dtype=losses['bg'].dtype) # bg loss handling in case of nan due to mask is all foreground
 
         losses['soft_col_cons'] = l1_loss_v2(params['rgb_colors'], variables["prev_col"])
 
@@ -185,17 +206,31 @@ def report_progress(params, data, i, progress_bar, every_i=100):
         progress_bar.update(every_i)
 
 
-def train(seq, exp, data_dir, output_dir):
+def train(seq, exp, data_dir, output_dir, dataset_type="cmu"):
     if os.path.exists(f"{output_dir}/{exp}/{seq}"):
         print(f"Experiment '{exp}' for sequence '{seq}' already exists. Exiting.")
         return
+
+    if dataset_type == "dynerf":
+        try:
+            assert os.path.exists(f"{data_dir}/{seq}/train_meta.json"), "Train metadata not found"
+            assert os.path.exists(f"{data_dir}/{seq}/test_meta.json"), "Test metadata not found"
+            assert os.path.exists(f"{data_dir}/{seq}/ims"), "Images not found"
+            assert os.path.exists(f"{data_dir}/{seq}/seg"), "Segmentations not found"
+            assert os.path.exists(f"{data_dir}/{seq}/init_pt_cld.npz"), "Point cloud not found"
+        except AssertionError as e:
+            print(e)
+            print("Please run preprocess.sh to generate required input files for training")
+            return
+
+    print(f"Training {seq} with {dataset_type} dataset")
     md = json.load(open(f"{data_dir}/{seq}/train_meta.json", 'r'))  # metadata
     num_timesteps = len(md['fn'])
     params, variables = initialize_params(seq, md, data_dir)
     optimizer = initialize_optimizer(params, variables)
     output_params = []
     for t in range(num_timesteps):
-        dataset = get_dataset(t, md, seq, data_dir)
+        dataset = get_dataset(t, md, seq, data_dir, dataset_type)
         todo_dataset = []
         is_initial_timestep = (t == 0)
         if not is_initial_timestep:
@@ -235,8 +270,24 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="basketball",
-        choices=["basketball", "boxes", "football", "juggle", "softball", "tennis"],
         help="Name of the dataset to use for training (e.g., basketball, boxes, etc.)",
     )
+    parser.add_argument(
+        "--dataset-type",
+        type=str,
+        default="cmu",
+        choices=["cmu", "dynerf"],
+        help="Type of dataset format: 'cmu' for the current format, 'dynerf' for DyNeRF format",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility (default: 42)",
+    )
     args = parser.parse_args()
-    train(args.dataset, args.exp_name, args.data_dir, args.output_dir)
+
+    set_seed(args.seed)
+    print(f"Random seed set to: {args.seed}")
+
+    train(args.dataset, args.exp_name, args.data_dir, args.output_dir, args.dataset_type)

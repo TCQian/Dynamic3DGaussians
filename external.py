@@ -202,7 +202,23 @@ def densify(params, variables, optimizer, i):
             if i >= 3000:
                 big_points_ws = torch.exp(params['log_scales']).max(dim=1).values > 0.1 * variables['scene_radius']
                 to_remove = torch.logical_or(to_remove, big_points_ws)
+
+            # Guard against nuking almost all points in a single iteration
+            num_pts = params['means3D'].shape[0]
+            if num_pts > 0:
+                min_keep = min(1024, num_pts)  # keep at least this many
+                # If removal would leave fewer than min_keep points, only remove the lowest-opacity ones
+                if to_remove.sum().item() > max(0, num_pts - min_keep):
+                    opac = torch.sigmoid(params['logit_opacities']).squeeze()
+                    # Keep top-k by opacity
+                    topk_idx = torch.topk(opac, k=min_keep).indices
+                    to_remove[topk_idx] = False
+
             params, variables = remove_points(to_remove, params, variables, optimizer)
+
+            # Record number of Gaussian points remaining after densify step
+            num_remaining = params['means3D'].shape[0]
+            print(f"Iteration {i}: {num_remaining} Gaussian points remaining after densify")
 
             torch.cuda.empty_cache()
 

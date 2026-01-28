@@ -11,10 +11,6 @@ from PIL import Image
 
 from helpers import setup_camera
 
-# image size & camera clipping planes
-w, h = 640, 360
-near, far = 0.01, 100.0
-
 # output method name
 METHOD = "ours"
 
@@ -60,9 +56,9 @@ def tensor_to_pil(im: torch.Tensor) -> Image.Image:
     return Image.fromarray(arr)
 
 
-def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
+def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path, dataset_type: str):
     """
-    For each (timestep, view) in train_meta.json:
+    For each (timestep, view) in test_meta.json:
       1. grab scene[t]
       2. render with that view's (k, w2c)
       3. save to .../test/METHOD/renders/<t>_<c>.png
@@ -72,10 +68,15 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
     scene = load_scene_data(seq, exp, out_dir)
 
     # 2) load metadata & build flat list of views
-    meta_path = data_dir / seq / "train_meta.json"
+    meta_path = data_dir / seq / "test_meta.json"
     with open(meta_path, "r") as f:
         meta = json.load(f)
 
+    near, far = 1.0, 100.0
+    if dataset_type == "dynerf":
+        near, far = 0.0, 1.0
+
+    width, height = meta["w"], meta["h"]
     views = []
     for t, (fns, ks, w2cs) in enumerate(zip(meta["fn"], meta["k"], meta["w2c"])):
         for c, fn in enumerate(fns):
@@ -105,7 +106,7 @@ def render_and_save(seq: str, exp: str, out_dir: Path, data_dir: Path):
         data_vars = scene[t]  # pick the right timestep’s dict
 
         # build camera & render
-        cam = setup_camera(w, h, view["k"], view["w2c"], near=near, far=far)
+        cam = setup_camera(width, height, view["k"], view["w2c"], near=near, far=far)
         with torch.no_grad():
             im, _, _ = Renderer(raster_settings=cam)(**data_vars)
 
@@ -139,10 +140,10 @@ if __name__ == "__main__":
         "--dataset",
         type=str,
         default="basketball",
-        choices=["basketball", "boxes", "football", "juggle", "softball", "tennis"],
         help="Name of the dataset to use for training (e.g., basketball, boxes, etc.)",
     )
+    parser.add_argument("--dataset-type", type=str, default="cmu")
     args = parser.parse_args()
 
     print(f"\n=== Sequence: {args.dataset} ===")
-    render_and_save(args.dataset, args.exp_name, args.output_dir, args.data_dir)
+    render_and_save(args.dataset, args.exp_name, args.output_dir, args.data_dir, args.dataset_type)
